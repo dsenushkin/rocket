@@ -25,6 +25,13 @@ class Optimizer(Capsule):
         if torch.is_grad_enabled():
             self._optimizer.step()
             self._optimizer.zero_grad()
+        # one more log message for humans
+        if attrs.looper is not None:
+            lrs = [
+                group.get("lr") 
+                for group in self._optimizer.param_groups
+            ]
+            attrs.looper.state.lr = lrs
 
     def destroy(self, attrs: Attributes = None):
         # safe pop from accelerator
