@@ -27,7 +27,7 @@ class Optimizer(Capsule):
             # if same object found twice, raise exeption
             if registered:
                 err = f"{self.__class__.__name__}: "
-                err += "same scheduler has been registered twice. "
+                err += "same optimizer has been registered twice. "
                 raise RuntimeError(err)
             # everything is ok, get modified optimizer
             registered = True
@@ -54,11 +54,15 @@ class Optimizer(Capsule):
 
     def destroy(self, attrs: Attributes = None):
         # safe pop from accelerator
+        _id = None
         for id, optimizer in enumerate(self._accelerator._optimizers):
             # skip other optimizers if exit
             if optimizer is not self._optimizer:
                 continue
-            # pop it from list
-            self._accelerator._optimizers.pop(id)
+            _id = id
+            break
+        # pop it from list
+        if _id is not None:
+            self._accelerator._optimizers.pop(_id)
         
         Capsule.destroy(self, attrs=attrs)

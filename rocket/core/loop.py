@@ -49,6 +49,7 @@ class Looper(Dispatcher):
             err = f"{self.__class__.__name__}: infinite loops are not allowed. "
             err += "Please, specify number of repeats."
             raise RuntimeError(err)
+        
 
     def reset(self, attrs: Attributes=None):
         self._epoch_idx += 1

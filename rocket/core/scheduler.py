@@ -44,12 +44,16 @@ class Scheduler(Capsule):
     
     def destroy(self, attrs: Attributes = None):
         # safe pop from accelerator
+        _id = None
         for id, scheduler in enumerate(self._accelerator._schedulers):
             # skip other optimizers if exit
             if scheduler is not self._scheduler:
                 continue
-            # pop it from list
-            self._accelerator._schedulers.pop(id)
+            _id = id
+            break
+        # pop it from list
+        if _id is not None:
+            self._accelerator._schedulers.pop(_id)
         
         Capsule.destroy(self, attrs=attrs)
         

@@ -34,11 +34,28 @@ class Dataset(Capsule):
     def setup(self, attrs: Attributes=None):
         # log setup state
         Capsule.setup(self, attrs=attrs)
-        # default torch dataloader
-        self._dataloader = torch.utils.data.DataLoader(self._dataset, 
-                                                       **self._kwargs)
-        # if distributed, prepare it
-        self._dataloader = self._accelerator.prepare(self._dataloader)
+
+        registered = False
+        # loop over all registered models
+        for dataloader in self._accelerator._dataloaders:
+            # skip other models if exist
+            if self._dataset is not dataloader.dataset:
+                continue
+            # if same object found twice, raise exeption
+            if registered:
+                err = f"{self.__class__.__name__}: "
+                err += "same dataset has been registered twice. "
+                raise RuntimeError(err)
+            # everything is of, get modified module
+            registered = True
+            self._dataloader = dataloader
+        # module not found, register it
+        if not registered:
+            # default torch dataloader
+            self._dataloader = torch.utils.data.DataLoader(self._dataset, 
+                                                           **self._kwargs)
+            # if distributed, prepare it
+            self._dataloader = self._accelerator.prepare(self._dataloader)
 
 
     def set(self, attrs: Attributes=None):
@@ -106,8 +123,17 @@ class Dataset(Capsule):
         # free dataloader, iterator has been freed in reset()
         self._dataloader = None
         self._active_dataloader = None
-        # refresh accelerator state
-        self._accelerator._dataloaders.pop()
+        # safe pop from accelerator
+        _id = None
+        for id, dataloader in enumerate(self._accelerator._dataloaders):
+            # skip other modules if exit
+            if dataloader is not self._dataloader:
+                continue
+            _id = id
+            break
+        # pop it from list
+        if _id is not None:
+            self._accelerator._dataloaders.pop(_id)
 
 
     def state_dict(self):

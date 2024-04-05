@@ -74,11 +74,15 @@ class Module(Dispatcher):
 
     def destroy(self, attrs: Attributes=None):
         # safe pop model from accelerator
+        _id = None
         for id, model in enumerate(self._accelerator._models):
             # skip other modules if exit
             if model is not self._module:
                 continue
-            # pop it from list
-            self._accelerator._models.pop(id)
+            _id = id
+            break
+        # pop it from list
+        if _id is not None:
+            self._accelerator._models.pop(_id)
         # destroy others
         Dispatcher.destroy(self, attrs=attrs)
