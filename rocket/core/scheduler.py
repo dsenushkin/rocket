@@ -27,7 +27,7 @@ class Scheduler(Capsule):
             # if same object found twice, raise exeption
             if registered:
                 err = f"{self.__class__.__name__}: "
-                err += "same optimizer has been registered twice. "
+                err += "same scheduler has been registered twice. "
                 raise RuntimeError(err)
             # everything is ok, get modified optimizer
             registered = True
