@@ -25,10 +25,28 @@ class Module(Dispatcher):
     def setup(self, attrs: Attributes=None):
         # register model BEFORE other entities 
         self.check_accelerator()
-        # register distributed training
-        self._module = self._accelerator.prepare(self._module)
-        # might be unnecessary, accelerate handle device placement automatically
-        self._module = self._module.to(self._accelerator.device)
+        # if module has already been registered this flag is True
+        registered = False
+        # loop over all registered models
+        for model in self._accelerator._models:
+            # skip other models if exist
+            if self._module is not model:
+                continue
+            # if same object found twice, raise exeption
+            if registered:
+                err = f"{self.__class__.__name__}: "
+                err += "same module has been registered twice. "
+                raise RuntimeError(err)
+            # everything is of, get modified module
+            registered = True
+            self._module = model
+        # module not found, register it
+        if not registered:
+            # push it in _models and modify forward call
+            self._module = self._accelerator.prepare(self._module)
+            # safe device placement, necessarily if accelerator 
+            # device placement flag is False
+            self._module = self._module.to(self._accelerator.device)
         # call others
         Dispatcher.setup(self, attrs)
     
@@ -56,12 +74,11 @@ class Module(Dispatcher):
 
     def destroy(self, attrs: Attributes=None):
         # safe pop model from accelerator
-        obj = self._accelerator._models.pop()
-        # be sure it is the same object
-        if obj is not self._module:
-            err = f"{self.__class__.__name__}: "
-            err += "illegal destroy request. "
-            err += f"{obj.__class__.__name__}"
-            raise RuntimeError(err)
+        for id, model in enumerate(self._accelerator._models):
+            # skip other modules if exit
+            if model is not self._module:
+                continue
+            # pop it from list
+            self._accelerator._models.pop(id)
         # destroy others
         Dispatcher.destroy(self, attrs=attrs)

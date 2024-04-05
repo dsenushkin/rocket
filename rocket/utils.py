@@ -1,7 +1,7 @@
 import torch
 
 from collections import defaultdict
-from typing import Mapping, Sequence, List, Union
+from typing import Mapping, Sequence, List, Union, Tuple
 
 
 
@@ -26,7 +26,7 @@ def apply(data, fn, **kwargs):
         return fn(data, **kwargs)
     elif isinstance(data, Mapping):
         return apply_mapping(data, fn, **kwargs)
-    elif isinstance(data, Sequence):
+    elif isinstance(data, (List, Tuple)):
         return apply_sequence(data, fn, **kwargs)
     return fn(data, **kwargs)
 

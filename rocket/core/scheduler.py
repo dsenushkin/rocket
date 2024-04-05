@@ -18,7 +18,24 @@ class Scheduler(Capsule):
     def setup(self, attrs: Attributes=None):
         Capsule.setup(self, attrs=attrs)
         # wrap scheduler for distributed training
-        self._accelerator.prepare(self._scheduler)
+        registered = False
+        # loop over all registered schedulers
+        for sched in self._accelerator._schedulers:
+            # skip other schedulers if exist
+            if self._scheduler is not sched.scheduler:
+                continue
+            # if same object found twice, raise exeption
+            if registered:
+                err = f"{self.__class__.__name__}: "
+                err += "same optimizer has been registered twice. "
+                raise RuntimeError(err)
+            # everything is ok, get modified optimizer
+            registered = True
+            self._scheduler = sched
+        # optimizer not found, register it
+        if not registered:
+            # push it in _optimizers and modify forward call
+            self._scheduler = self._accelerator.prepare(self._scheduler)
 
     def launch(self, attrs: Attributes = None):
         # if training is disabled, nothing to do
@@ -27,13 +44,12 @@ class Scheduler(Capsule):
     
     def destroy(self, attrs: Attributes = None):
         # safe pop from accelerator
-        obj = self._accelerator._schedulers.pop()
-        # be sure it is the same object
-        if obj.scheduler is not self._scheduler:
-            err = f"{self.__class__.__name__}: "
-            err += "illegal destroy request. "
-            err += f"{obj.__class__.__name__}"
-            raise RuntimeError(err)
+        for id, scheduler in enumerate(self._accelerator._schedulers):
+            # skip other optimizers if exit
+            if scheduler is not self._scheduler:
+                continue
+            # pop it from list
+            self._accelerator._schedulers.pop(id)
         
         Capsule.destroy(self, attrs=attrs)
         

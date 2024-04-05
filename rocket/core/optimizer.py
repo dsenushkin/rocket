@@ -18,7 +18,25 @@ class Optimizer(Capsule):
     def setup(self, attrs: Attributes=None):
         Capsule.setup(self, attrs=attrs)
         # wrap optimizer for distributed training
-        self._accelerator.prepare(self._optimizer)
+        registered = False
+        # loop over all registered optimizers
+        for optim in self._accelerator._optimizers:
+            # skip other optimizers if exist
+            if self._optimizer is not optim.optimizer:
+                continue
+            # if same object found twice, raise exeption
+            if registered:
+                err = f"{self.__class__.__name__}: "
+                err += "same optimizer has been registered twice. "
+                raise RuntimeError(err)
+            # everything is ok, get modified optimizer
+            registered = True
+            self._optimizer = optim
+        # optimizer not found, register it
+        if not registered:
+            # push it in _optimizers and modify forward call
+            self._optimizer = self._accelerator.prepare(self._optimizer)
+
 
     def launch(self, attrs: Attributes = None):
         # if training is disabled, nothing to do
@@ -33,14 +51,14 @@ class Optimizer(Capsule):
             ]
             attrs.looper.state.lr = lrs
 
+
     def destroy(self, attrs: Attributes = None):
         # safe pop from accelerator
-        obj = self._accelerator._optimizers.pop()
-        # be sure it is the same object
-        if obj.optimizer is not self._optimizer:
-            err = f"{self.__class__.__name__}: "
-            err += "illegal destroy request. "
-            err += f"{obj.__class__.__name__}"
-            raise RuntimeError(err)
+        for id, optimizer in enumerate(self._accelerator._optimizers):
+            # skip other optimizers if exit
+            if optimizer is not self._optimizer:
+                continue
+            # pop it from list
+            self._accelerator._optimizers.pop(id)
         
         Capsule.destroy(self, attrs=attrs)

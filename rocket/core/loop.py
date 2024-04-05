@@ -66,7 +66,7 @@ class Looper(Dispatcher):
         desc = f"{colored(self._tag, 'green')} " 
         desc += f"epoch={self._epoch_idx}, "
         desc += f"grad={self._grad_enabled}"
-        
+
         status_bar = tqdm(range(self._repeats),
                           initial=0,
                           desc=desc,
