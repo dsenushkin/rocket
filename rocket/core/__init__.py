@@ -8,3 +8,4 @@ from rocket.core.meter import Meter, Metric
 from rocket.core.loss import Loss
 from rocket.core.optimizer import Optimizer
 from rocket.core.scheduler import Scheduler
+from rocket.core.tracker import Tracker
