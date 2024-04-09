@@ -6,6 +6,7 @@ from accelerate import Accelerator
 
 from rocket.core.dispatcher import Dispatcher
 from rocket.core.capsule import Capsule, Attributes
+from rocket.utils import default_move
 
 
 
@@ -46,7 +47,8 @@ class Module(Dispatcher):
             self._module = self._accelerator.prepare(self._module)
             # safe device placement, necessarily if accelerator 
             # device placement flag is False
-            self._module = self._module.to(self._accelerator.device)
+            self._module = default_move(self._module, self._accelerator.device)
+            #self._module.to(self._accelerator.device)
         # call others
         Dispatcher.setup(self, attrs)
     

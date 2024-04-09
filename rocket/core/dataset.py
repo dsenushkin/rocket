@@ -6,7 +6,7 @@ from accelerate import Accelerator
 import torch.utils.data
 
 from rocket.core.capsule import Capsule, Attributes
-from rocket.utils import move, collate
+from rocket.utils import default_collate, default_move
 
 
 class Dataset(Capsule):
@@ -25,7 +25,7 @@ class Dataset(Capsule):
         self._iterator = None
         # dataloader args
         self._kwargs = kwargs
-        self._kwargs.update(collate_fn=collate)
+        self._kwargs.update(collate_fn=default_collate)
         # loop indices
         self._batch_idx = 0
         self._total = 0
@@ -109,7 +109,11 @@ class Dataset(Capsule):
             # move to device
             # if accelerate is properly defined, use it
             device = self._accelerator.device
-            attrs.batch = move(data, device)
+
+
+
+
+            attrs.batch = default_move(data, device)
             
             if attrs.looper is not None:
                 # data is provided, continue inner loop
