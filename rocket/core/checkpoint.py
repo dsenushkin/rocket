@@ -49,6 +49,10 @@ class Checkpointer(Capsule):
     def launch(self, attrs: Attributes=None):
         # debug log for humans
         Capsule.launch(self, attrs=attrs)
+
+        if not self._accelerator.is_main_process:
+            return
+
         # nothing to do
         if self._save_every < 0:
             return

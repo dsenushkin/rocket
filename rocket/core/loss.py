@@ -37,11 +37,12 @@ class Loss(Capsule):
         if self._accelerator.sync_gradients:
             # send log into trackers and reset
             self._accelerator.log({self._tag: self._value}, step=self._iter_idx)
-            self._value = 0.0
-            self._iter_idx += 1
 
             if attrs.looper is not None:
                 attrs.looper.state.loss = self._value
+           
+            self._value = 0.0
+            self._iter_idx += 1
 
         self._accelerator.backward(loss)
         
