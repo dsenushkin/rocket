@@ -20,6 +20,11 @@ class Launcher(Dispatcher):
         self._epoch_idx = 0
         self._statefull = statefull
 
+    def set(self, attrs: Attributes = None):
+        pass
+
+    def reset(self, attrs: Attributes = None):
+        pass
 
     def launch(self, attrs: Attributes=None):
         # default debug log
@@ -31,13 +36,14 @@ class Launcher(Dispatcher):
 
         for _epoch in range(self._epoch_idx, self._num_epochs):
             # epoch set logic
-            Dispatcher.set(self, attrs=attrs)
-            # update epoch index
+            # run full loop logic sequentially
+            for capsule in self._capsules:
+                capsule.set(attrs=attrs)
+                # launch logic
+                capsule.launch(attrs=attrs)
+                # epoch reset logic
+                capsule.reset(attrs=attrs)
             self._epoch_idx = _epoch
-            # launch logic
-            Dispatcher.launch(self, attrs=attrs)
-            # epoch reset logic
-            Dispatcher.reset(self, attrs=attrs)
         # patched dispatcher call
         self.destroy(attrs)
 

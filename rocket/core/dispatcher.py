@@ -44,9 +44,8 @@ class Dispatcher(Capsule):
         # call default behavior
         Capsule.destroy(self, attrs=attrs) 
 
-
+    # set, launch, reset runs in direct order always
     def set(self, attrs: Attributes=None):
-        # set / reset methods are opposite in order 
         Capsule.set(self, attrs=attrs)
         # call hidden capsules
         for capsule in self._capsules:
@@ -54,11 +53,10 @@ class Dispatcher(Capsule):
 
 
     def reset(self, attrs: Attributes=None):
-        # set / reset methods are opposite in order 
-        for capsule in reversed(self._capsules):
+        Capsule.reset(self, attrs=attrs)
+        for capsule in self._capsules:
             capsule.dispatch(Events.RESET, attrs)
         # call default behavior
-        Capsule.reset(self, attrs=attrs)
 
 
     def launch(self, attrs: Attributes=None):

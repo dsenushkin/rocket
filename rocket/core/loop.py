@@ -38,7 +38,7 @@ class Looper(Dispatcher):
             method(self, attrs=attrs)
         return wrapper
 
-
+    @run_if_needed
     def set(self, attrs: Attributes=None):
         Dispatcher.set(self, attrs=attrs)
 
@@ -49,8 +49,8 @@ class Looper(Dispatcher):
             err = f"{self.__class__.__name__}: infinite loops are not allowed. "
             err += "Please, specify number of repeats."
             raise RuntimeError(err)
-        
-
+    
+    @run_if_needed
     def reset(self, attrs: Attributes=None):
         self._epoch_idx += 1
         Dispatcher.reset(self, attrs=attrs)

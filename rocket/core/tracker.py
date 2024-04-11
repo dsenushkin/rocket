@@ -16,7 +16,7 @@ class Tracker(Capsule):
                  statefull: bool = True, 
                  accelerator: Accelerator = None, 
                  logger: Logger = None, 
-                 priority: int = 1000) -> None:
+                 priority: int = 200) -> None:
         super().__init__(statefull=statefull, 
                          accelerator=accelerator, 
                          logger=logger, 
@@ -31,7 +31,7 @@ class Tracker(Capsule):
         Capsule.setup(self, attrs=attrs)
         self._tracker = self._accelerator.get_tracker(self._backend)
             
-        if isinstance(self._tracker, GeneralTracker):
+        if type(self._tracker) == GeneralTracker:
             wrn = f"Accelerator has not initialized {self._backend}."
             wrn += " Trying to create it..."
             self._logger.warn(wrn)
@@ -45,13 +45,16 @@ class Tracker(Capsule):
             
         self._tracker = self._accelerator.get_tracker(self._backend)
 
+
+        
+    def set(self, attrs: Attributes = None):
+        Capsule.set(self, attrs=attrs)
         attrs.tracker = Attributes(scalars=Attributes(),
                                    images=Attributes())
-        
+
 
     def launch(self, attrs: Attributes = None):
         Capsule.launch(self, attrs=attrs)
-        print(self._iter_idx)
         # tracker expects attrs.tracker to be defined
         if attrs is None or attrs.tracker is None:
             return
@@ -59,8 +62,31 @@ class Tracker(Capsule):
         # pass forward in case of validation loop or accumulated optimizer step
         if torch.is_grad_enabled() and not self._accelerator.sync_gradients:
             return
+        self.log(attrs)
+
+    
+    def reset(self, attrs: Attributes = None):
+        Capsule.reset(self, attrs=attrs)
+        self.log(attrs=attrs)
+        del attrs.tracker
+    
+    
+
+    def destroy(self, attrs: Attributes = None):
+        del self._tracker
+        Capsule.destroy(self, attrs=attrs)
+        
+
+    def state_dict(self):
+        return Attributes(iter_idx=self._iter_idx)
+    
+    def load_state_dict(self, state):
+        self._iter_idx = state.iter_idx
 
 
+    def log(self, attrs):
+        if not attrs.tracker.images and not attrs.tracker.scalars:
+            return
         # if images are not empty and tracker can log it
         if attrs.tracker.images and hasattr(self._tracker, "log_images"):
             if not isinstance(attrs.tracker.images, Mapping):
@@ -90,17 +116,3 @@ class Tracker(Capsule):
         attrs.tracker = Attributes(scalars=Attributes(),
                                    images=Attributes())
         self._iter_idx += 1
-    
-    
-
-    def destroy(self, attrs: Attributes = None):
-        del self._tracker
-        Capsule.destroy(self, attrs=attrs)
-        
-
-    def state_dict(self):
-        return Attributes(iter_idx=self._iter_idx)
-    
-    def load_state_dict(self, state):
-        self._iter_idx = state.iter_idx
-
