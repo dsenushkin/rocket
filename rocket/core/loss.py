@@ -16,7 +16,6 @@ class Loss(Capsule):
                          statefull=True,
                          priority=priority)
         self._objective = objective
-        self._iter_idx = 0
         self._value = 0.0
         self._tag = tag
 
@@ -27,6 +26,10 @@ class Loss(Capsule):
         # if no batch provided, nothing to do
         if attrs.batch is None:
             return
+    
+        if not torch.is_grad_enabled():
+            return
+        
         # main logic here
         loss = self._objective(attrs.batch)
 
@@ -36,21 +39,19 @@ class Loss(Capsule):
         # reset loss value if optimizer has steped
         if self._accelerator.sync_gradients:
             # send log into trackers and reset
-            self._accelerator.log({self._tag: self._value}, step=self._iter_idx)
+            if attrs.tracker is not None:
+                attrs.tracker.scalars.update({self._tag: self._value})
 
             if attrs.looper is not None:
                 attrs.looper.state.loss = self._value
            
             self._value = 0.0
-            self._iter_idx += 1
 
         self._accelerator.backward(loss)
         
 
     def state_dict(self):
-        return Attributes(iter_idx=self._iter_idx,
-                          value=self._value)
+        return Attributes(value=self._value)
     
     def load_state_dict(self, state):
-        self._iter_idx = state.iter_idx
         self._value = state.value

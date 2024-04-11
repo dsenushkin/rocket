@@ -1,4 +1,6 @@
 
+import torch
+from typing import Mapping
 from logging import Logger
 from accelerate import Accelerator
 from accelerate.tracking import GeneralTracker
@@ -30,9 +32,7 @@ class Tracker(Capsule):
         self._tracker = self._accelerator.get_tracker(self._backend)
             
         if isinstance(self._tracker, GeneralTracker):
-
-            wrn = f"{self.__class__.__name__}: "
-            wrn += f"accelerator does not contain {self._backend}."
+            wrn = f"Accelerator has not initialized {self._backend}."
             wrn += " Trying to create it..."
             self._logger.warn(wrn)
 
@@ -44,20 +44,53 @@ class Tracker(Capsule):
                 raise RuntimeError(err)
             
         self._tracker = self._accelerator.get_tracker(self._backend)
-    
+
+        attrs.tracker = Attributes(scalars=Attributes(),
+                                   images=Attributes())
+        
 
     def launch(self, attrs: Attributes = None):
         Capsule.launch(self, attrs=attrs)
-        
+        print(self._iter_idx)
         # tracker expects attrs.tracker to be defined
         if attrs is None or attrs.tracker is None:
             return
         
-        if attrs.tracker.images is not None and hasattr(self._tracker, "log_images"):
-            self._tracker.log_images(attrs.tracker.images, step=self._iter_idx)
-            self._logger.debug("Successfully logged images to TensorBoard")
+        # pass forward in case of validation loop or accumulated optimizer step
+        if torch.is_grad_enabled() and not self._accelerator.sync_gradients:
+            return
+
+
+        # if images are not empty and tracker can log it
+        if attrs.tracker.images and hasattr(self._tracker, "log_images"):
+            if not isinstance(attrs.tracker.images, Mapping):
+                wrn += f"Tracker expect dict-style images for logging,"
+                wrn += f" got {type(attrs.tracker.images)}"
+                self._logger.warn(wrn)
+
+            if not torch.is_grad_enabled():
+                self._tracker.log_images(attrs.tracker.images, step=self._iter_idx)
+                self._logger.debug(f"Successfully logged images to {self._backend}")
+            elif self._accelerator.sync_gradients:
+                self._tracker.log_images(attrs.tracker.images, step=self._iter_idx)
+                self._logger.debug(f"Successfully logged images to {self._backend}")
+
         
+        # if scalars are not empty, log it. Every backend can log scalars.
+        if attrs.tracker.scalars:
+            if not isinstance(attrs.tracker.scalars, Mapping):
+                wrn += f"Tracker expect dict-style scalars for logging,"
+                wrn += f" got {type(attrs.tracker.scalars)}"
+                self._logger.warn(wrn)
+            
+            self._tracker.log(attrs.tracker.scalars, step=self._iter_idx)
+            self._logger.debug(f"Successfully logged scalars to {self._backend}")
+
+        # reset tracker buffer when logging is done
+        attrs.tracker = Attributes(scalars=Attributes(),
+                                   images=Attributes())
         self._iter_idx += 1
+    
     
 
     def destroy(self, attrs: Attributes = None):

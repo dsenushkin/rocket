@@ -53,7 +53,9 @@ class Optimizer(Capsule):
                 for idx, group in enumerate(self._optimizer.param_groups)
             }
             # send log into trackers and reset
-            self._accelerator.log(log, step=self._iter_idx)
+            # self._accelerator.log(log, step=self._iter_idx)
+            if attrs.tracker is not None:
+                attrs.tracker.scalars.update(log)
 
             if attrs.looper is not None:
                 attrs.looper.state.lr = list(log.values())
