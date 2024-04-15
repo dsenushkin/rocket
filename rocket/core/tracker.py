@@ -70,7 +70,6 @@ class Tracker(Capsule):
         self.log(attrs=attrs)
         del attrs.tracker
     
-    
 
     def destroy(self, attrs: Attributes = None):
         del self._tracker

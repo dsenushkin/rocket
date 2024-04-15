@@ -68,7 +68,7 @@ class Looper(Dispatcher):
         desc += f"epoch={self._epoch_idx}, "
         desc += f"grad={self._grad_enabled}"
 
-        status_bar = tqdm(range(self._repeats),
+        status_bar = tqdm(range(self._repeats + 1),
                           initial=0,
                           desc=desc,
                           # Only show the progress bar once on each machine.

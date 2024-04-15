@@ -24,6 +24,8 @@ def default_collate(batch):
 
 
 
+def move_str_fn(batch, device, *, move_fn_map: Optional[MapType] = None):
+    return batch
 
 def move_tensor_fn(batch, device, *, move_fn_map: Optional[MapType] = None):
     return batch.to(device)
@@ -82,6 +84,8 @@ def move(batch, device, *, move_fn_map: Optional[MapType] = None):
 
 default_move_fn_map = {torch.Tensor: move_tensor_fn}
 default_move_fn_map[torch.nn.Module] = move_module_fn
+default_move_fn_map[str] = move_str_fn
+# default_move_fn_map[None] = move_str_fn
 
 def default_move(batch, device):
     return move(batch, device, move_fn_map=default_move_fn_map)

@@ -13,6 +13,7 @@ class Dataset(Capsule):
     def __init__(self,
                  dataset: Iterable,
                  statefull: bool = True,
+                 device_placement: bool = True,
                  accelerator: Accelerator = None,
                  priority: int =1000,
                  **kwargs):
@@ -23,6 +24,7 @@ class Dataset(Capsule):
         self._dataloader = None
         self._active_dataloader = None
         self._iterator = None
+        self._device_placement = device_placement
         # dataloader args
         self._kwargs = kwargs
         self._kwargs.update(collate_fn=default_collate)
@@ -110,10 +112,10 @@ class Dataset(Capsule):
             # if accelerate is properly defined, use it
             device = self._accelerator.device
 
-
-
-
-            attrs.batch = default_move(data, device)
+            if self._device_placement:
+                attrs.batch = default_move(data, device)
+            else:
+                attrs.batch = data
             
             if attrs.looper is not None:
                 # data is provided, continue inner loop

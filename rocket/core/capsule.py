@@ -21,7 +21,7 @@ class Events(Enum):
 
 
 class Capsule:
-    def __init__(self, 
+    def __init__(self,
                  statefull: bool=False,
                  accelerator: Accelerator=None,
                  logger: logging.Logger=None,
@@ -75,6 +75,7 @@ class Capsule:
         message += f"with attributes {attrs}"
         # default behavior is used for debugging
         self._logger.debug(message)
+
 
 
     def set(self, attrs: Attributes=None):
