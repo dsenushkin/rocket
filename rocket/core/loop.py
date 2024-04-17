@@ -24,7 +24,7 @@ class Looper(Dispatcher):
                          accelerator=accelerator,
                          priority=priority)
         self._statefull = statefull
-        self._repeats = repeats or -1
+        self._repeats = repeats or None
         self._grad_enabled = grad_enabled
         self._run_every = run_every
         self._epoch_idx = 1
@@ -41,34 +41,38 @@ class Looper(Dispatcher):
     @run_if_needed
     def set(self, attrs: Attributes=None):
         Dispatcher.set(self, attrs=attrs)
-
-        if self._repeats < 0:
+        
+        if self._repeats is None:
             self.infer_repeats()
         
-        if self._repeats < 0:
+        if self._repeats is None:
             err = f"{self.__class__.__name__}: infinite loops are not allowed. "
             err += "Please, specify number of repeats."
             raise RuntimeError(err)
-    
-    @run_if_needed
-    def reset(self, attrs: Attributes=None):
-        self._epoch_idx += 1
-        Dispatcher.reset(self, attrs=attrs)
         
-
-    @run_if_needed
-    def launch(self, attrs: Attributes):
         if attrs.looper is None:
             # if loop state is not user-defined, do it
             attrs.looper = Attributes(repeats=self._repeats,
                                       state=Attributes(),
-                                      terminate=False)
+                                      terminate=False,
+                                      tag=self._tag)
+    
+
+    @run_if_needed
+    def reset(self, attrs: Attributes=None):
+        self._epoch_idx += 1
+        Dispatcher.reset(self, attrs=attrs)
+        del attrs.looper
+        
+
+    @run_if_needed
+    def launch(self, attrs: Attributes):
 
         desc = f"{colored(self._tag, 'green')} " 
         desc += f"epoch={self._epoch_idx}, "
         desc += f"grad={self._grad_enabled}"
 
-        status_bar = tqdm(range(self._repeats + 1),
+        status_bar = tqdm(range(self._repeats),
                           initial=0,
                           desc=desc,
                           # Only show the progress bar once on each machine.
@@ -87,9 +91,6 @@ class Looper(Dispatcher):
             status_bar.set_postfix(attrs.looper.state)
             status_bar.update(1)
     
-        # clean loops info
-        del attrs.looper
-
         self._batch_idx = 0
         self._repeats = -1
 
@@ -110,10 +111,15 @@ class Looper(Dispatcher):
                 raise RuntimeError(err)
 
     def infer_repeats(self):
+        repeats = 0
         for capsule in self._capsules:
             # infer repeats from dataset only
             if isinstance(capsule, Dataset):
-                self._repeats += capsule._total
+                repeats += capsule._total
+
+        if repeats:
+            self._repeats = repeats
+
         message = f"{self.__class__.__name__} infered {self._repeats} repeats."
         
         self._logger.info(message)
