@@ -62,6 +62,7 @@ class Looper(Dispatcher):
     def reset(self, attrs: Attributes=None):
         self._epoch_idx += 1
         Dispatcher.reset(self, attrs=attrs)
+        self._repeats = None
         del attrs.looper
         
 
