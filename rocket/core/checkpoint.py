@@ -60,7 +60,7 @@ class Checkpointer(Capsule):
         # everything that passed in accelerate.prepare 
         # or accelerate.register_for_chekpointing will be saved
         if (self._iter_idx + 1) % self._save_every == 0:
-            self._accelerator.wait_for_everyone()
+            # self._accelerator.wait_for_everyone()
 
             output_dir = os.path.join(self._output_dir, str(self._iter_idx))
             if not self._overwrite and os.path.exists(output_dir):
