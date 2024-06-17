@@ -56,7 +56,7 @@ class Dataset(Capsule):
                                                            **self._kwargs)
             # if distributed, prepare it
             self._dataloader = self._accelerator.prepare(self._dataloader,
-                                                         device_placement=False)
+                                                         device_placement=[False])
 
 
     def set(self, attrs: Attributes=None):
