@@ -13,7 +13,6 @@ class Dataset(Capsule):
     def __init__(self,
                  dataset: Iterable,
                  statefull: bool = True,
-                 device_placement: bool = True,
                  accelerator: Accelerator = None,
                  priority: int =1000,
                  **kwargs):
@@ -57,7 +56,8 @@ class Dataset(Capsule):
             self._dataloader = torch.utils.data.DataLoader(self._dataset, 
                                                            **self._kwargs)
             # if distributed, prepare it
-            self._dataloader = self._accelerator.prepare(self._dataloader)
+            self._dataloader = self._accelerator.prepare(self._dataloader,
+                                                         device_placement=False)
 
 
     def set(self, attrs: Attributes=None):
@@ -112,10 +112,10 @@ class Dataset(Capsule):
             # if accelerate is properly defined, use it
             device = self._accelerator.device
 
-            if self._device_placement:
-                attrs.batch = default_move(data, device)
-            else:
-                attrs.batch = data
+            # if self._device_placement:
+            attrs.batch = default_move(data, device)
+            # else:
+                # attrs.batch = data
             
             if attrs.looper is not None:
                 # data is provided, continue inner loop

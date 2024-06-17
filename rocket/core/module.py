@@ -43,12 +43,10 @@ class Module(Dispatcher):
             self._module = model
         # module not found, register it
         if not registered:
+            # safe device placement, necessarily if accelerator 
+            self._module = default_move(self._module, self._accelerator.device)
             # push it in _models and modify forward call
             self._module = self._accelerator.prepare(self._module)
-            # safe device placement, necessarily if accelerator 
-            # device placement flag is False
-            self._module = default_move(self._module, self._accelerator.device)
-            #self._module.to(self._accelerator.device)
         # call others
         Dispatcher.setup(self, attrs)
     
