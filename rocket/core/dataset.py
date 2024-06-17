@@ -23,7 +23,6 @@ class Dataset(Capsule):
         self._dataloader = None
         self._active_dataloader = None
         self._iterator = None
-        self._device_placement = device_placement
         # dataloader args
         self._kwargs = kwargs
         self._kwargs.update(collate_fn=default_collate)
