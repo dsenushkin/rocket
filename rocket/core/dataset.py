@@ -1,4 +1,3 @@
-import logging
 from typing import Iterable
 
 from accelerate import Accelerator
@@ -6,147 +5,240 @@ from accelerate import Accelerator
 import torch.utils.data
 
 from rocket.core.capsule import Capsule, Attributes
-from rocket.utils import default_collate, default_move
+from rocket.utils.torch import torch_collate, torch_move
 
 
 class Dataset(Capsule):
-    def __init__(self,
-                 dataset: Iterable,
-                 statefull: bool = True,
-                 accelerator: Accelerator = None,
-                 priority: int =1000,
-                 **kwargs):
+    """Датасет.
+    Этот класс управляет генератором данных в пайплайне. Он считывает
+    кусок данных с помощью предоставленного итерируемого объекта, перемещает
+    его на нужное устройство и кладет в буфер обмена данными, те в attrs.
+    Объект данного класса имеет состояние и может быть сохранен и восстановлен
+    из состояния детерминированным образом за счет акселератора.
+
+    Пример:
+
+    .. code-block:: python
+
+        mnist = MNIST(path, ...)
+        net = myAwesomeNet(...)
+        loss = myAwesomeLoss(...)
+        opt = myAwesomeOpt(...)
+
+
+        launcher = rocket.Launcher([
+                rocket.Looper([
+                    rocket.Dataset(mnist, batch_size=1024),
+                    rocket.Module(net, capsules=[
+                        rocket.Loss(objective=loss),
+                        rocket.Optimizer(opt),
+                    ]),
+                ]),
+            ],
+            num_epochs=4
+        )
+
+    Parameters
+    ----------
+    dataset : Iterable
+        Итерируемый объект, считывающий данные с диска.
+    statefull : bool, optional, default = True
+        Флаг состояния. Датасет по умолчанию имеет состояние.
+    accelerator : Accelerator | None, optional, default = None
+        Объект класса accelerate.Accelerator.
+    priority : int, optional, default = 1000
+        Приоритет вызова обработчиков событий в очереди.
+        Чем меньше значение, тем выше приоритет.
+    """
+    def __init__(
+        self,
+        dataset: Iterable,
+        statefull: bool = True,
+        accelerator: Accelerator | None = None,
+        priority: int = 1000,
+        **kwargs
+    ):
         super().__init__(accelerator=accelerator,
                          statefull=statefull,
                          priority=priority)
+        # объект датасета
         self._dataset = dataset
+        # дефолтный даталоадер
         self._dataloader = None
+        # текущий даталоадер, отличается от дефолтного в случае 
+        # восстановления класса из состояния с неполным проходом по иходному
         self._active_dataloader = None
+        # итератор, выдает данные по next(self._iterator)
         self._iterator = None
-        # dataloader args
+
+        # pytorch dataloader аргументы
         self._kwargs = kwargs
-        self._kwargs.update(collate_fn=default_collate)
-        # loop indices
+        # модифицированный collate
+        self._kwargs.setdefault('collate_fn', torch_collate)
+
+        # индексация общего размера и текущей итерации по данным
         self._batch_idx = 0
         self._total = 0
 
+    def setup(self, attrs: Attributes | None = None):
+        """Обработчик события :code:`Events.SETUP`.
+        Если капсула имеет состояние, то регистрирует ее в акселератор
+        для возможности ее чекпоинтинга.
+        Создает даталоадер и регистрирует его в акселераторе.
 
-    def setup(self, attrs: Attributes=None):
-        # log setup state
+        Parameters
+        ----------
+        attrs : Attributes | None, optional, default = None
+            Глобальный буфер обмена данными.
+
+        Raises
+        ------
+        RuntimeError
+            Датасет зарегистрирован дважды в акселераторе.
+        """
         Capsule.setup(self, attrs=attrs)
 
         registered = False
-        # loop over all registered models
+
+        # Регистрация даталоадера с проверкой дубликатов.
         for dataloader in self._accelerator._dataloaders:
-            # skip other models if exist
             if self._dataset is not dataloader.dataset:
                 continue
-            # if same object found twice, raise exeption
+
             if registered:
+                # Датасет зарегистрирован дважды. Бросаем исключение.
                 err = f"{self.__class__.__name__}: "
-                err += "same dataset has been registered twice. "
+                err += "same dataset has been registered twice."
                 raise RuntimeError(err)
-            # everything is of, get modified module
+
+            # Нашли первый даталоадер с таким датасетом, запоминаем его.
             registered = True
             self._dataloader = dataloader
-        # module not found, register it
+
+        # Не нашли совпадений, регистрируем
         if not registered:
-            # default torch dataloader
-            self._dataloader = torch.utils.data.DataLoader(self._dataset, 
-                                                           **self._kwargs)
-            # if distributed, prepare it
-            self._dataloader = self._accelerator.prepare(self._dataloader,
-                                                         device_placement=[False])
 
+            self._dataloader = torch.utils.data.DataLoader(
+                self._dataset, **self._kwargs
+            )
+            self._dataloader = self._accelerator.prepare(
+                self._dataloader, device_placement=[False]
+            )
 
-    def set(self, attrs: Attributes=None):
-        # default debug log
+    def set(self, attrs: Attributes | None = None):
+        """Обработчик события :code:`Events.SET`.
+        Создает итератор по данным изходя из текущего состояния объекта.
+        Поддерживает детерминированное восстановление состояния.
+
+        Parameters
+        ----------
+        attrs : Attributes | None, optional, default = None
+            Глобальный буфер обмена данными.
+        """
         Capsule.set(self, attrs=attrs)
-        # if this dataset is in eval mode, does not resume state
-        # if state is default, nothing to do
+
+        # Восстанавливаем состояние, если оно отлично от дефолтного.
+        # Состояние не восстанавливается, если метод вызван в no_grad контексте
         if torch.is_grad_enabled() and self._batch_idx > 0:
             self._active_dataloader = self._accelerator.skip_first_batches(
                 self._dataloader, self._batch_idx
             )
         else:
             self._active_dataloader = self._dataloader
-        # total number of iterations left 
+
         self._total = len(self._active_dataloader)
-        # create iterator
         self._iterator = iter(self._active_dataloader)
 
+    def reset(self, attrs: Attributes | None = None):
+        """Обработчик события :code:`Events.RESET`.
+        Вызывается при полном проходе по данному датасету.
+        Обнуляет внутреннее состояние в дефолтное.
 
-    def reset(self, attrs: Attributes=None):
-        # default debug log
+        Parameters
+        ----------
+        attrs : Attributes | None, optional, default = None
+            Глобальный буфер обмена данными.
+        """
         Capsule.reset(self, attrs=attrs)
-        # at the end of an epoch
-        # 1. reset batch counter
+        # По результатам полного прохода по данным
+        # 1. Обнуляем текущий индекс для возможности повторного прохода
         self._batch_idx = 0
-        # 2. reset total number
+        # 2. Обнуляем общий счетчик, это необходимо для восстановления
         self._total = 0
-        # 3. reset iterator
+        # 3. Обнуляем итератор
         self._iterator = None
 
+    def launch(self, attrs: Attributes | None = None):
+        """Обработчик события :code:`Events.LAUNCH`.
+        Выполняет fetch данных из итератора и кладет в буфер обмена.
+        Ничего не делает, если буфер обмена не задан или занят.
+        Перезаписывает поля управления циклом в буфере, если цикл задан.
+        Если данные закончились attrs.looper.terminate = True.
 
-    def launch(self, attrs: Attributes=None):
-        # default debug log
+        Parameters
+        ----------
+        attrs : Attributes | None, optional, default = None
+            Глобальный буфер обмена данными.
+        """
         Capsule.launch(self, attrs=attrs)
-        # if no attributes provided or 
-        # batch has already been created
-        # then nothing to do
+
+        # Ничего не делай, если буфер обмена не задан или уже занят.
         if attrs is None or attrs.batch is not None:
             return
-        
-        # else try to get it
+
         data = next(self._iterator, None)
-        
+
         if data is None:
+            # итератор пустой
             attrs.batch = data
-            
+
+            # если был цикл, голосуем за выход
             if attrs.looper is not None:
                 attrs.looper.terminate = True
                 return
         else:
-            # move to device
-            # if accelerate is properly defined, use it
+            # итератор не пустой
             device = self._accelerator.device
 
-            # if self._device_placement:
-            attrs.batch = default_move(data, device)
-            # else:
-                # attrs.batch = data
-            
+            # перемещаем на устройство и кладем в буфер
+            attrs.batch = torch_move(data, device)
+
+            # если был цикл, голосуем за продолжение
             if attrs.looper is not None:
-                # data is provided, continue inner loop
                 attrs.looper.terminate = False
-            # increase batch counter
+
             self._batch_idx += 1
 
-    def destroy(self, attrs: Attributes=None):
-        # log it for human tracking
+    def destroy(self, attrs: Attributes | None = None):
+        """Обработчик события :code:`Events.DESTROY`.
+        Удаляет даталоадеры внутри себя и из акселератора.
+
+        Parameters
+        ----------
+        attrs : Attributes | None, optional, default = None
+            Глобальный буфер обмена данными.
+        """
         Capsule.destroy(self, attrs=attrs)
-        # free dataloader, iterator has been freed in reset()
+
+        # итератор уже освобожден в reset()
+        # освобождаем даталоадеры
         self._dataloader = None
         self._active_dataloader = None
-        # safe pop from accelerator
+
+        # чистим акселератор
         _id = None
         for id, dataloader in enumerate(self._accelerator._dataloaders):
-            # skip other modules if exit
+            # ищем подходящий даталоадер
             if dataloader is not self._dataloader:
                 continue
             _id = id
             break
-        # pop it from list
+        # удаляем
         if _id is not None:
             self._accelerator._dataloaders.pop(_id)
 
-
     def state_dict(self):
-        # if (len(self._dataloader) - self._batch_idx) > 0:
-            # method for register_for_checkpointing, gather state
         return Attributes(batch_idx=self._batch_idx)
-        # return Attributes(batch_idx=0)
-    
-    def load_state_dict(self, state):
-        # method for register_for_checkpointing, load state
+
+    def load_state_dict(self, state: Attributes):
         self._batch_idx = state.batch_idx

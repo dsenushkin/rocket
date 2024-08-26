@@ -1,1 +1,1 @@
-from rocket.core import *
+from rocket.core import *       # noqa F401
