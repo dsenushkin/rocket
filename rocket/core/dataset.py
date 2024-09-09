@@ -1,6 +1,18 @@
-from typing import Iterable
+# Copyright (c) 2023 Rocket Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-from accelerate import Accelerator
+from typing import Iterable
 
 import torch.utils.data
 
@@ -9,115 +21,157 @@ from rocket.utils.torch import torch_collate, torch_move
 
 
 class Dataset(Capsule):
-    """Датасет.
-    Этот класс управляет генератором данных в пайплайне. Он считывает
-    кусок данных с помощью предоставленного итерируемого объекта, перемещает
-    его на нужное устройство и кладет в буфер обмена данными, те в attrs.
-    Объект данного класса имеет состояние и может быть сохранен и восстановлен
-    из состояния детерминированным образом за счет акселератора.
+    """
+    A capsule for handling datasets in the Rocket framework.
 
-    Пример:
-
-    .. code-block:: python
-
-        mnist = MNIST(path, ...)
-        net = myAwesomeNet(...)
-        loss = myAwesomeLoss(...)
-        opt = myAwesomeOpt(...)
-
-
-        launcher = rocket.Launcher([
-                rocket.Looper([
-                    rocket.Dataset(mnist, batch_size=1024),
-                    rocket.Module(net, capsules=[
-                        rocket.Loss(objective=loss),
-                        rocket.Optimizer(opt),
-                    ]),
-                ]),
-            ],
-            num_epochs=4
-        )
+    This class extends the Capsule base class to provide functionality for
+    working with datasets, including setup, iteration, and state management.
 
     Parameters
     ----------
     dataset : Iterable
-        Итерируемый объект, считывающий данные с диска.
-    statefull : bool, optional, default = True
-        Флаг состояния. Датасет по умолчанию имеет состояние.
-    accelerator : Accelerator | None, optional, default = None
-        Объект класса accelerate.Accelerator.
-    priority : int, optional, default = 1000
-        Приоритет вызова обработчиков событий в очереди.
-        Чем меньше значение, тем выше приоритет.
+        The dataset to be wrapped by this capsule.
+    statefull : bool, optional
+        Whether this capsule maintains state (default is True).
+    accelerator : Accelerator | None, optional
+        The accelerator to be used for distributed training (default is None).
+    priority : int, optional
+        The priority of this capsule in the execution order (default is 1000).
+    **kwargs
+        Additional keyword arguments to be passed to the PyTorch DataLoader.
+
+    Attributes
+    ----------
+    _dataset : Iterable
+        The wrapped dataset object.
+    _dataloader : torch.utils.data.DataLoader | None
+        The default DataLoader for the dataset.
+    _active_dataloader : torch.utils.data.DataLoader | None
+        The current active DataLoader, which may differ from the default in
+        case of state restoration.
+    _iterator : Iterator | None
+        The iterator over the active DataLoader.
+    _kwargs : dict
+        PyTorch DataLoader arguments.
+    _batch_idx : int
+        The current batch index.
+    _total : int
+        The total number of batches in the dataset.
+
+    Notes
+    -----
+    This class handles the lifecycle of a dataset within the Rocket framework,
+    including initialization, iteration, state management, and cleanup. It
+    supports deterministic state restoration and integrates with the
+    accelerator for distributed training scenarios.
+
+    Example
+    -------
+    .. code-block:: python
+
+        from rocket.core.dataset import Dataset
+        from torch.utils.data import TensorDataset
+        import torch
+
+        # Create a simple dataset
+        data = torch.randn(100, 5)
+        labels = torch.randint(0, 2, (100,))
+        tensor_dataset = TensorDataset(data, labels)
+
+        # Create a Dataset capsule
+        dataset_capsule = Dataset(
+            dataset=tensor_dataset,
+            batch_size=16,
+            shuffle=True
+        )
+
+        # Setup the dataset
+        dataset_capsule.setup()
+
+        # Iterate through the dataset
+        attrs = Attributes()
+        for _ in range(5):  # Get first 5 batches
+            dataset_capsule.launch(attrs)
+            batch_data, batch_labels = attrs.batch
+            print(f"Batch shape: {batch_data.shape}")
+            attrs.batch = None  # Clear the batch for the next iteration
     """
+
     def __init__(
         self,
         dataset: Iterable,
         statefull: bool = True,
-        accelerator: Accelerator | None = None,
         priority: int = 1000,
         **kwargs
     ):
-        super().__init__(accelerator=accelerator,
-                         statefull=statefull,
+        super().__init__(statefull=statefull,
                          priority=priority)
-        # объект датасета
+        # Dataset object
         self._dataset = dataset
-        # дефолтный даталоадер
+        # Default dataloader
         self._dataloader = None
-        # текущий даталоадер, отличается от дефолтного в случае 
-        # восстановления класса из состояния с неполным проходом по иходному
+        # Current dataloader, differs from default when restoring
+        # class from a state with incomplete pass through the original
         self._active_dataloader = None
-        # итератор, выдает данные по next(self._iterator)
+        # Iterator, yields data via next(self._iterator)
         self._iterator = None
 
-        # pytorch dataloader аргументы
+        # PyTorch DataLoader arguments
         self._kwargs = kwargs
-        # модифицированный collate
+        # Modified collate function
         self._kwargs.setdefault('collate_fn', torch_collate)
 
-        # индексация общего размера и текущей итерации по данным
+        # Indexing of total size and current iteration over data
         self._batch_idx = 0
         self._total = 0
 
-    def setup(self, attrs: Attributes | None = None):
-        """Обработчик события :code:`Events.SETUP`.
-        Если капсула имеет состояние, то регистрирует ее в акселератор
-        для возможности ее чекпоинтинга.
-        Создает даталоадер и регистрирует его в акселераторе.
+    def setup(self, attrs: Attributes | None = None) -> None:
+        """
+        Handles the :code:`Events.SETUP` event.
+
+        Initializes the capsule, setting up the dataloader and registering it
+        with the accelerator.
 
         Parameters
         ----------
-        attrs : Attributes | None, optional, default = None
-            Глобальный буфер обмена данными.
+        attrs : Attributes | None, optional
+            The global data exchange buffer.
 
         Raises
         ------
         RuntimeError
-            Датасет зарегистрирован дважды в акселераторе.
+            If the same dataset is registered twice.
+
+        Returns
+        -------
+        None
+
+        Notes
+        -----
+        Initializes and registers the dataloader, avoiding duplicates.
         """
         Capsule.setup(self, attrs=attrs)
 
         registered = False
 
-        # Регистрация даталоадера с проверкой дубликатов.
+        # Check for duplicate dataloader registration
         for dataloader in self._accelerator._dataloaders:
             if self._dataset is not dataloader.dataset:
                 continue
 
             if registered:
-                # Датасет зарегистрирован дважды. Бросаем исключение.
-                err = f"{self.__class__.__name__}: "
-                err += "same dataset has been registered twice."
-                raise RuntimeError(err)
+                # Dataset registered twice. Raise an exception.
+                raise RuntimeError(
+                    f"{self.__class__.__name__}: "
+                    "same dataset has been registered twice."
+                )
 
-            # Нашли первый даталоадер с таким датасетом, запоминаем его.
+            # Found the first dataloader with this dataset, store it.
             registered = True
             self._dataloader = dataloader
 
-        # Не нашли совпадений, регистрируем
+        # If not registered, create and register a new dataloader
         if not registered:
-
             self._dataloader = torch.utils.data.DataLoader(
                 self._dataset, **self._kwargs
             )
@@ -125,20 +179,29 @@ class Dataset(Capsule):
                 self._dataloader, device_placement=[False]
             )
 
-    def set(self, attrs: Attributes | None = None):
-        """Обработчик события :code:`Events.SET`.
-        Создает итератор по данным изходя из текущего состояния объекта.
-        Поддерживает детерминированное восстановление состояния.
+    def set(self, attrs: Attributes | None = None) -> None:
+        """
+        Handles the :code:`Events.SET` event.
+
+        Sets up the active dataloader, either restoring a previous state or
+        initializing a new one.
 
         Parameters
         ----------
-        attrs : Attributes | None, optional, default = None
-            Глобальный буфер обмена данными.
+        attrs : Attributes | None, optional
+            The global data exchange buffer.
+
+        Returns
+        -------
+        None
+
+        Notes
+        -----
+        Sets up the active dataloader and initializes related attributes.
         """
         Capsule.set(self, attrs=attrs)
 
-        # Восстанавливаем состояние, если оно отлично от дефолтного.
-        # Состояние не восстанавливается, если метод вызван в no_grad контексте
+        # Restore state if different from default and not in no_grad context
         if torch.is_grad_enabled() and self._batch_idx > 0:
             self._active_dataloader = self._accelerator.skip_first_batches(
                 self._dataloader, self._batch_idx
@@ -149,96 +212,150 @@ class Dataset(Capsule):
         self._total = len(self._active_dataloader)
         self._iterator = iter(self._active_dataloader)
 
-    def reset(self, attrs: Attributes | None = None):
-        """Обработчик события :code:`Events.RESET`.
-        Вызывается при полном проходе по данному датасету.
-        Обнуляет внутреннее состояние в дефолтное.
+    def reset(self, attrs: Attributes | None = None) -> None:
+        """
+        Handles the :code:`Events.RESET` event.
+
+        Resets the capsule's state to its initial configuration, preparing it
+        for a new data iteration cycle.
 
         Parameters
         ----------
-        attrs : Attributes | None, optional, default = None
-            Глобальный буфер обмена данными.
+        attrs : Attributes | None, optional
+            The global data exchange buffer.
+
+        Returns
+        -------
+        None
+
+        Notes
+        -----
+        Resets batch index, total count, and clears the iterator.
         """
         Capsule.reset(self, attrs=attrs)
-        # По результатам полного прохода по данным
-        # 1. Обнуляем текущий индекс для возможности повторного прохода
         self._batch_idx = 0
-        # 2. Обнуляем общий счетчик, это необходимо для восстановления
         self._total = 0
-        # 3. Обнуляем итератор
         self._iterator = None
 
-    def launch(self, attrs: Attributes | None = None):
-        """Обработчик события :code:`Events.LAUNCH`.
-        Выполняет fetch данных из итератора и кладет в буфер обмена.
-        Ничего не делает, если буфер обмена не задан или занят.
-        Перезаписывает поля управления циклом в буфере, если цикл задан.
-        Если данные закончились attrs.looper.terminate = True.
+    def launch(self, attrs: Attributes | None = None) -> None:
+        """
+        Handles the :code:`Events.LAUNCH` event.
+
+        Executes the main functionality of the capsule. Processes the next
+        batch of data from the iterator and updates the global data exchange
+        buffer accordingly.
 
         Parameters
         ----------
-        attrs : Attributes | None, optional, default = None
-            Глобальный буфер обмена данными.
+        attrs : Attributes | None, optional
+            The global data exchange buffer.
+
+        Returns
+        -------
+        None
+
+        Notes
+        -----
+        Processes next data batch, updates buffer, and handles iteration state.
         """
         Capsule.launch(self, attrs=attrs)
 
-        # Ничего не делай, если буфер обмена не задан или уже занят.
+        # Do nothing if the exchange buffer is not set or already occupied.
         if attrs is None or attrs.batch is not None:
             return
 
         data = next(self._iterator, None)
 
         if data is None:
-            # итератор пустой
+            # Iterator is empty
             attrs.batch = data
 
-            # если был цикл, голосуем за выход
+            # If there was a loop, vote for exit
             if attrs.looper is not None:
                 attrs.looper.terminate = True
                 return
         else:
-            # итератор не пустой
+            # Iterator is not empty
             device = self._accelerator.device
 
-            # перемещаем на устройство и кладем в буфер
+            # Move to device and put in buffer
             attrs.batch = torch_move(data, device)
 
-            # если был цикл, голосуем за продолжение
+            # If there was a loop, vote to continue
             if attrs.looper is not None:
                 attrs.looper.terminate = False
 
             self._batch_idx += 1
 
-    def destroy(self, attrs: Attributes | None = None):
-        """Обработчик события :code:`Events.DESTROY`.
-        Удаляет даталоадеры внутри себя и из акселератора.
+    def destroy(self, attrs: Attributes | None = None) -> None:
+        """
+        Handles the :code:`Events.DESTROY` event.
+
+        Called when the capsule is being destroyed. Cleans up resources and
+        removes references to prevent memory leaks.
 
         Parameters
         ----------
-        attrs : Attributes | None, optional, default = None
-            Глобальный буфер обмена данными.
+        attrs : Attributes | None, optional
+            The global data exchange buffer.
+
+        Returns
+        -------
+        None
+
+        Notes
+        -----
+        Clears references and removes dataloader from accelerator.
         """
         Capsule.destroy(self, attrs=attrs)
 
-        # итератор уже освобожден в reset()
-        # освобождаем даталоадеры
+        # Clear dataloader references
         self._dataloader = None
         self._active_dataloader = None
 
-        # чистим акселератор
+        # Clean up the accelerator
         _id = None
         for id, dataloader in enumerate(self._accelerator._dataloaders):
-            # ищем подходящий даталоадер
             if dataloader is not self._dataloader:
                 continue
             _id = id
             break
-        # удаляем
+
+        # Remove the dataloader from the accelerator if found
         if _id is not None:
             self._accelerator._dataloaders.pop(_id)
 
-    def state_dict(self):
-        return Attributes(batch_idx=self._batch_idx)
+    def state_dict(self) -> dict:
+        """
+        Returns a dictionary containing a whole state of the capsule.
 
-    def load_state_dict(self, state: Attributes):
-        self._batch_idx = state.batch_idx
+        This method is used to serialize the current state of the capsule,
+        which can be used for saving checkpoints or transferring the state
+        to another instance.
+
+        Returns
+        -------
+        dict
+            A dictionary containing the current batch index.
+        """
+        return dict(batch_idx=self._batch_idx)
+
+    def load_state_dict(self, state: dict) -> None:
+        """
+        Copies parameters and buffers from state into this capsule.
+
+        This method is used to deserialize the state of the capsule,
+        typically when loading a checkpoint or transferring state between
+        instances.
+
+        Parameters
+        ----------
+        state : dict
+            A dictionary containing the state to be loaded into the capsule.
+            It should have a 'batch_idx' key with the corresponding value.
+
+        Returns
+        -------
+        None
+        """
+        self._batch_idx = state['batch_idx']

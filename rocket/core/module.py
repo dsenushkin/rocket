@@ -1,9 +1,21 @@
+# Copyright (c) 2023 Rocket Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import sys
 import torch
 
 from contextlib import contextmanager
-
-from accelerate import Accelerator
 
 from rocket.core.dispatcher import Dispatcher
 from rocket.core.capsule import Capsule, Attributes
@@ -11,93 +23,110 @@ from rocket.utils.torch import torch_move
 
 
 class Module(Dispatcher):
-    """Основной класс-обертка для torch.nn.Module.
-    Предназначен для интеграции оборачиваемого модуля в пакет rocket.
-    Обертка скрывает операции с модулем необходимые для распределенного
-    обучения от пользователя. Класс содежрит капсулы, которые должны
-    должны выполнятся в контексте модуля. 
+    """
+    A class representing a module in the Rocket framework.
+
+    This class extends the Dispatcher class and encapsulates a PyTorch module,
+    providing functionality for setup, launch, and destruction within the
+    Rocket pipeline.
+
+    Attributes
+    ----------
+    _module : torch.nn.Module
+        The PyTorch module being wrapped.
 
     Parameters
     ----------
     module : torch.nn.Module
-        Модуль торча, который оборачивается
-    capsules : list[Capsule], optional, default = []
-        Список капсул, которые выполняются для этого модуля.
-    priority : int, optional, default = 1000
-        Приоритет вызова обработчиков событий в очереди.
-        Чем меньше значение, тем выше приоритет.
+        The PyTorch module to be wrapped.
+    capsules : list[Capsule], optional
+        A list of capsules to be included (e.g., losses, optimizers,
+        schedulers, postprocessors).
+    priority : int, optional
+        The priority of the module in the event handling queue
+        (default is 1000).
     """
+
     def __init__(
         self,
         module: torch.nn.Module,
         capsules: list[Capsule] = [],   # suppose to include
                                         # losses, optimizers,
                                         # schedulers, postprocessors
-        accelerator: Accelerator | None = None,
         priority: int = 1000
     ) -> None:
         super().__init__(capsules=capsules,
-                         accelerator=accelerator,
                          priority=priority)
         self._module = module
 
-    def setup(self, attrs: Attributes | None = None):
-        """Обработчик события :code:`Events.SETUP`.
-        Регистрирует модуль в акселераторе, оборачивает его для
-        распределенного обучения и переносит веса на вычислитель.
-        Для всех внутренних капсул вызывает :code:`.set(attrs)`.
+    def setup(self, attrs: Attributes | None = None) -> None:
+        """
+        Handler for the :class:`Events.SETUP` event.
+
+        Sets up the module by checking the accelerator, registering the module,
+        and preparing it for distributed training.
 
         Parameters
         ----------
-        attrs : Attributes | None, optional, default = None
-            Глобальный буфер обмена данными.
+        attrs : Attributes | None, optional
+            Global data exchange buffer. Default is None.
 
         Raises
         ------
         RuntimeError
-            Один и тот же модуль зарегистрирован дважды.
+            If the same module has been registered twice.
+
+        Returns
+        -------
+        None
         """
         self.check_accelerator()
-        # если модуль уже зарегистрирован, этот флаг = True
+        # If the module is already registered, this flag = True
         registered = False
-        # проверяем на дублирование перед регистрацией.
+        # Check for duplication before registration
         for model in self._accelerator._models:
-            # пропускаем несовпадения
+            # Skip non-matches
             if self._module is not model:
                 continue
-            # нашли два, бросаем исключение
+            # Found two, raise an exception
             if registered:
-                err = f"{self.__class__.__name__}: "
-                err += "same module has been registered twice. "
-                raise RuntimeError(err)
-            # нашли один, берем его
+                raise RuntimeError(
+                    f"{self.__class__.__name__}: "
+                    "same module has been registered twice."
+                )
+            # Found one, take it
             registered = True
             self._module = model
 
-        # ничего не нашли, регистрируем
+        # Nothing found, register
         if not registered:
-            # перемещаем на девайс в ручном режиме
+            # Move to device manually
             self._module = torch_move(self._module, self._accelerator.device)
-            # оброачиваем в акселератор
+            # Wrap in accelerator
             self._module = self._accelerator.prepare(self._module)
 
         Dispatcher.setup(self, attrs)
 
-    def launch(self, attrs: Attributes | None = None):
-        """Обработчик события :code:`Events.LAUNCH`.
-        Метод осуществляет прямой проход по модели.
-        Входные данные - attrs.batch. Затем вызывает все внутренние капсулы.
+    def launch(self, attrs: Attributes | None = None) -> None:
+        """
+        Handler for the :class:`Events.LAUNCH` event.
+
+        Executes the forward pass of the module and launches other capsules.
 
         Parameters
         ----------
-        attrs : Attributes | None, optional, default = None
-            Глобальный буфер обмена данными.
+        attrs : Attributes | None, optional
+            Global data exchange buffer. Default is None.
+
+        Returns
+        -------
+        None
         """
-        # модуль работает с батчем из глобального буфера
+        # The module works with a batch from the global buffer
         if attrs is None or attrs.batch is None:
             return
 
-        # train/eval моды. Ориентируется по градиенту.
+        # train/eval modes. Oriented by gradient
         if torch.is_grad_enabled():
             # training mode
             self._module.train()
@@ -105,33 +134,39 @@ class Module(Dispatcher):
             # eval mode
             self._module.eval()
 
-        # вызов прямого прохода в своем контексте
-        # with self._accelerator.accumulate(self._module):
+        # Call forward pass in its context
         with self.runner():
             attrs.batch = self._module.forward(attrs.batch)
-            # вызываем другие капсулы,
-            # такие как лоссы, оптимизаторы, планировщики
+            # Call other capsules,
+            # such as losses, optimizers, schedulers
             Dispatcher.launch(self, attrs=attrs)
 
-    def destroy(self, attrs: Attributes | None = None):
-        """Обработчик события :code:`Events.DESTROY`.
-        Удаляет модуль из акселератора. Вызывает деструкторы внутренних капсул.
+    def destroy(self, attrs: Attributes | None = None) -> None:
+        """
+        Handler for the :class:`Events.DESTROY` event.
+
+        Removes the module from the accelerator's model list and destroys
+        the dispatcher.
 
         Parameters
         ----------
-        attrs : Attributes | None, optional, default = None
-            Глобальный буфер обмена данными.
+        attrs : Attributes | None, optional
+            Global data exchange buffer. Default is None.
+
+        Returns
+        -------
+        None
         """
         _id = None
-        # ищем совпадения с текущим
+        # Look for matches with the current one
         for id, model in enumerate(self._accelerator._models):
-            # пропускаем несовпадения
+            # Skip non-matches
             if model is not self._module:
                 continue
-            # нашли
+            # Found
             _id = id
             break
-        # удаляем
+        # Remove
         if _id is not None:
             self._accelerator._models.pop(_id)
 
@@ -139,9 +174,38 @@ class Module(Dispatcher):
 
     @contextmanager
     def runner(self):
-        """Контекст выполнения forward.
-        Поддерживает аккумуляцию градиента по шагам и автоприведение типов
-        для mixed_precision обучения.
+        """
+        A context manager that sets up the environment for running the module.
+
+        This method creates a context that enables automatic mixed precision
+        (autocast) and gradient accumulation (accumulate) for the module. It's
+        designed to be used with a 'with' statement to ensure proper setup and
+        teardown of these contexts.
+
+        The autocast context allows for automatic mixed precision during
+        forward pass, which can speed up computations on supporting hardware.
+
+        The accumulate context allows for gradient accumulation over multiple
+        forward and backward passes before performing a parameter update, which
+        is useful for simulating larger batch sizes.
+
+        Yields
+        ------
+        None
+            The method yields control back to the caller within the established
+            context.
+
+        Example
+        -------
+        with self.runner():
+            # Perform forward pass and other operations here
+            pass
+
+        Notes
+        -----
+        This method relies on the accelerator object to provide the autocast
+        and accumulate contexts. Make sure the accelerator is properly set up
+        before using this method.
         """
         autocast_ctx = self._accelerator.autocast()
         accumulate_ctx = self._accelerator.accumulate(self._module)

@@ -14,9 +14,9 @@ def apply_to_collection(
     if isinstance(container, collections.abc.Mapping):
         try:
             if isinstance(container, collections.abc.MutableMapping):
-                # Маппинг может содержать дополнительные свойства в классе.
-                # Поэтому сначала копируем, а потом обновляем только ключи.
-                # Обновление разрешено только для изменяемых маппингов
+                # The mapping may contain additional properties in the class.
+                # Therefore, we first copy, and then update only the keys.
+                # Updating is allowed only for mutable mappings
                 clone = copy.copy(container)
                 clone.update(
                     {
@@ -33,8 +33,9 @@ def apply_to_collection(
                     }
                 )
         except TypeError:
-            # У маппинга нет методов .copy(), .update() или __init__(iterable)
-            # Используем словарь по умолчанию, возможна потеря данных
+            # The mapping doesn't have .copy(), .update() methods or
+            # __init__(iterable)
+            # Using a default dictionary, possible data loss
             return dict(
                 {
                     key: fn(container[key], key=key, **kwargs)
@@ -45,9 +46,9 @@ def apply_to_collection(
     elif isinstance(container, collections.abc.Sequence):
         try:
             if isinstance(container, collections.abc.MutableSequence):
-                # Списки могут содержать дополнительные свойства в классе.
-                # Поэтому сначала копируем, а потом обновляем по индексам.
-                # Обновление разрешено только для изменяемых списков
+                # Lists may contain additional properties in the class.
+                # Therefore, we first copy, and then update by indices.
+                # Updating is allowed only for mutable lists
                 clone = copy.copy(container)  # type: ignore[arg-type]
                 for i, sample in enumerate(container):
                     clone[i] = fn(sample, key=i, **kwargs)
@@ -60,8 +61,9 @@ def apply_to_collection(
                     ]
                 )
         except TypeError:
-            # У списка нет методов .copy(), .update() или __init__(iterable)
-            # Используем список по умолчанию, возможна потеря данных
+            # The list doesn't have .copy(), .update() methods or
+            # __init__(iterable)
+            # Using a default list, possible data loss
             return list(
                 [
                     fn(sample, key=i, **kwargs)

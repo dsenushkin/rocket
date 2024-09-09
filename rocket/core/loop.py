@@ -1,9 +1,21 @@
+# Copyright (c) 2023 Rocket Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import torch
 from typing import Callable
 from tqdm import tqdm
 from termcolor import colored
-
-from accelerate import Accelerator
 
 from rocket.core.capsule import Capsule, Attributes
 from rocket.core.dataset import Dataset
@@ -11,58 +23,50 @@ from rocket.core.dispatcher import Dispatcher
 
 
 class Looper(Dispatcher):
-    """Класс управления циклом.
-    Реализует полный проход внутри одной эпохи.
-    Длина эпохи выводится из количества и длины датасетов
-    внутри класса. Класс поддерживает возможность скипа некоторых
-    эпох, что регулирует параметр run_every. Также есть опция запуска
-    цикла без градиента для валидации.
-
-    Пример:
-
-    .. code-block:: python
-
-        mnist = MNIST(path, ...)
-        net = myAwesomeNet(...)
-        loss = myAwesomeLoss(...)
-        opt = myAwesomeOpt(...)
-
-
-        launcher = rocket.Launcher([
-                rocket.Looper([
-                    rocket.Dataset(mnist, batch_size=1024),
-                    rocket.Module(net, capsules=[
-                        rocket.Loss(objective=loss),
-                        rocket.Optimizer(opt),
-                    ]),
-                ]),
-            ],
-            num_epochs=4
-        )
-
-
-    Parameters
-    ----------
-    capsules : list[Capsule]
-        Список капсул, формирующих одну эпоху
-    tag : str, optional, default = "Looper"
-        Тег цикла, нужен для вывода в консоль.
-    grad_enabled : bool, optional, default = True
-        Флаг градиента, по умолчанию разрешен.
-    repeats : int | None, optional, default = None
-        Количество повторений в цикле. Если не задан, то производится
-        попытка вывести длину из датасетов в списке капсул.
-    run_every : int, optional, default = 1
-        Параметр пропуска эпох. Если > 1, то цикл будер запускаться
-        только при epoch %  run_every == 0.
-    statefull : bool, optional, default = True
-        Флаг сохранения состояния цикла.
-    accelerator : Accelerator | None, optional, default = None
-        Объект класса accelerate.Accelerator.
-    priority : int, optional, default = 1000
-        Приоритет вызова обработчиков событий в очереди.
-        Чем меньше значение, тем выше приоритет.
     """
+    A class for managing looping behavior in the Rocket framework.
+
+    This class extends the Dispatcher class and provides functionality for
+    repeating a set of operations (capsules) a specified number of times.
+    It can be configured to run at specific intervals during the training
+    process.
+
+    Attributes:
+    -----------
+    _statefull : bool
+        Whether the Looper maintains state across iterations.
+    _repeats : int | None
+        The number of times to repeat the loop, calculated at runtime.
+    _user_defined_repeats : int | None
+        The user-specified number of repetitions.
+    _grad_enabled : bool
+        Whether gradients are enabled during the loop execution.
+    _run_every : int
+        The frequency at which this Looper should run (e.g., every N epochs).
+    _iter_idx : int
+        The current iteration index.
+    _tag : str
+        A string identifier for this Looper instance.
+
+    Parameters:
+    -----------
+    capsules : list[Capsule]
+        A list of Capsule objects to be executed in the loop.
+    tag : str, optional
+        An identifier for this Looper. Defaults to "Looper".
+    grad_enabled : bool, optional
+        Whether to enable gradients. Defaults to True.
+    repeats : int | None, optional
+        The number of times to repeat the loop. If None, will be inferred.
+    run_every : int, optional
+        How often to run this Looper (e.g., every N epochs). Defaults to 1.
+    statefull : bool, optional
+        Whether this Looper maintains state. Defaults to True.
+    priority : int, optional
+        The priority of this Looper in the event handling queue. Defaults to
+        1000.
+    """
+
     def __init__(
         self,
         capsules: list[Capsule],
@@ -71,56 +75,66 @@ class Looper(Dispatcher):
         repeats: int | None = None,
         run_every: int = 1,
         statefull: bool = True,
-        accelerator: Accelerator | None = None,
         priority: int = 1000
     ) -> None:
-        super().__init__(capsules=capsules,
-                         accelerator=accelerator,
-                         priority=priority)
+        super().__init__(capsules=capsules, priority=priority)
         self._statefull = statefull
-        # кол-во повторений, которым оперируют методы класса
+        # number of repetitions used by class methods
         self._repeats = None
-        # повторения заданные пользователем, необходимы для set
+        # user-defined repetitions, necessary for set
         self._user_defined_repeats = repeats or None
         self._grad_enabled = grad_enabled
         self._run_every = run_every
         self._iter_idx = 0
         self._tag = tag
 
-    def run_if_needed(method: Callable):
-        """Декоратор.
-        Пропускает запуск метода, если epoch % run_every != 0
+    def run_if_needed(method: Callable) -> Callable:
+        """
+        Decorator to conditionally execute a method based on the current epoch.
+
+        This decorator checks if the current epoch is a multiple of the
+        Looper's `_run_every` attribute. If so, it executes the decorated
+        method; otherwise, it skips execution.
 
         Parameters
         ----------
         method : Callable
-            Оборачиваемый метод
+            The method to be decorated.
+
+        Returns
+        -------
+        Callable
+            A wrapper function that conditionally executes the original method.
         """
         def wrapper(self, attrs: Attributes | None = None):
             epoch = attrs.launcher.epoch_idx
-            if epoch % self._run_every != 0:
-                return
-            method(self, attrs=attrs)
+            if epoch % self._run_every == 0:
+                method(self, attrs=attrs)
         return wrapper
 
     @run_if_needed
-    def set(self, attrs: Attributes | None = None):
-        """Обработчик события :code:`Events.SET`.
-        Вызывает метод :code:`.set(attrs)` у капсул внутри объекта.
-        Проверяет валидность задания цикла. Если кол-во повторений
-        не задано, пытается заинферить это значение из датасетов
-        хранимых в объекте. Инициализирует буфер цикла в глобальном буффере
-        по необходимости. Может вызываться не каждую эпоху, см. run_every.
+    def set(self, attrs: Attributes | None = None) -> None:
+        """
+        Handles the :code:`Events.SET` event.
+
+        This method sets up the Looper for execution. It initializes the number
+        of repeats, either from user-defined values or by inference. It also
+        sets up the looper attributes in the global exchange buffer.
 
         Parameters
         ----------
-        attrs : Attributes | None, optional, default = None
-            Глобальный буфер обмена данными.
+        attrs : Attributes | None, optional
+            The global data exchange buffer.
 
         Raises
         ------
         RuntimeError
-            Бесконечный цикл не разрешен.
+            If the number of repeats is not specified and cannot be inferred,
+            potentially leading to an infinite loop.
+
+        Returns
+        -------
+        None
         """
         Dispatcher.set(self, attrs=attrs)
 
@@ -130,45 +144,59 @@ class Looper(Dispatcher):
             self.infer_repeats()
 
         if self._repeats is None:
-            err = f"{self.__class__.__name__}: "
-            err += "infinite loops are not allowed. "
-            err += "Please, specify number of repeats."
-            raise RuntimeError(err)
+            raise RuntimeError(
+                f"{self.__class__.__name__}: infinite loops are not allowed. "
+                "Please, specify number of repeats."
+            )
 
         if attrs.looper is None:
-            # если буфер цикла не задан пользователем, создаем
-            attrs.looper = Attributes(repeats=self._repeats,
-                                      state=Attributes(),
-                                      terminate=False,
-                                      tag=self._tag)
+            attrs.looper = Attributes(
+                repeats=self._repeats,
+                state=Attributes(),
+                terminate=False,
+                tag=self._tag
+            )
 
     @run_if_needed
-    def reset(self, attrs: Attributes | None = None):
-        """Обработчик события :code:`Events.RESET`.
-        Вызывает метод :code:`.reset(attrs)` у капсул внутри объекта.
-        Увеличивает счетчик эпох, очищает буфер повторений.
-        Может вызываться не каждую эпоху, см. run_every.
+    def reset(self, attrs: Attributes | None = None) -> None:
+        """
+        Handles the :code:`Events.RESET` event.
+
+        This method resets the Looper to its initial state. It clears the
+        number of repeats and removes the looper attributes from the global
+        exchange buffer.
 
         Parameters
         ----------
-        attrs : Attributes | None, optional, default = None
-            Глобальный буфер обмена данными.
+        attrs : Attributes | None, optional
+            The global data exchange buffer.
+
+        Returns
+        -------
+        None
         """
         Dispatcher.reset(self, attrs=attrs)
         self._repeats = None
         del attrs.looper
 
     @run_if_needed
-    def launch(self, attrs: Attributes | None):
-        """Обработчик события :code:`Events.LAUNCH`.
-        Итеративно вызывает :code:`.launch(attrs)` у всех капсул внутри себя.
-        Поддрерживает no_grad контекст.
-        Может вызываться не каждую эпоху, см. run_every.
+    def launch(self, attrs: Attributes | None) -> None:
+        """
+        Handles the :code:`Events.LAUNCH` event.
+
+        This method executes the main loop of the Looper, iterating for a
+        specified number of repeats or until terminated. It manages the
+        progress bar, gradient context, and triggers the launch event for
+        child capsules.
 
         Parameters
         ----------
-        attrs : Attributes | None, optional, default = None
-            Глобальный буфер обмена данными.
+        attrs : Attributes | None, optional
+            The global data exchange buffer.
+
+        Returns
+        -------
+        None
         """
         epoch_idx = attrs.launcher.epoch_idx
 
@@ -179,66 +207,117 @@ class Looper(Dispatcher):
         status_bar = tqdm(range(self._repeats),
                           initial=0,
                           desc=desc,
-                          # показываем прогресс только на локальном хосте
+                          # show progress only on the local host
                           disable=not self._accelerator.is_local_main_process)
 
         for _ in range(self._repeats):
-            # очищаем батч после итерации
+            # clear batch after iteration
             attrs.batch = None
-            # выставляем контекст градиента
+            # set gradient context
             with torch.set_grad_enabled(self._grad_enabled):
-                # вызываем событие
+                # trigger event
                 Dispatcher.launch(self, attrs)
-            # шорткат для выхода из цикла
-            # другие капсулы могут выставить terminate
+            # shortcut to exit the loop
+            # other capsules can set terminate
             if attrs.looper.terminate:
                 break
-            # обновляем статус бар
+            # update status bar
             status_bar.set_postfix(attrs.looper.state)
             status_bar.update(1)
 
         self._iter_idx = 0
         self._repeats = -1
 
-    def state_dict(self):
-        return Attributes(iter_idx=self._iter_idx)
+    def state_dict(self) -> dict:
+        """
+        Returns a dictionary containing the state of the Looper.
 
-    def load_state_dict(self, state: Attributes):
-        self._iter_idx = state.iter_idx
+        This method serializes the current state of the Looper, which can be
+        used for saving checkpoints or transferring the state to another
+        instance.
+
+        Returns
+        -------
+        dict
+            A dictionary containing the current iteration index.
+        """
+        return dict(iter_idx=self._iter_idx)
+
+    def load_state_dict(self, state: dict) -> None:
+        """
+        Loads the state into the Looper from a dictionary.
+
+        This method deserializes the state of the Looper, typically when
+        loading a checkpoint or transferring state between instances.
+
+        Parameters
+        ----------
+        state : dict
+            A dictionary containing the state to be loaded into the Looper.
+            It should have an 'iter_idx' key with the corresponding value.
+
+        Returns
+        -------
+        None
+        """
+        self._iter_idx = state.get("iter_idx")
 
     def guard(self, capsules: list[Capsule]):
-        """Метод проверки капсул.
-        Осуществляет проверку на вложеность циклов.
-        В текущей реализации вложеные циклы запрещены.
+        """
+        Checks if the given capsules are valid for this Looper.
+
+        This method ensures that no internal Looper instances are present
+        among the capsules, as nested Loopers are not allowed.
 
         Parameters
         ----------
         capsules : list[Capsule]
-            Список капсул для проверки.
+            A list of Capsule instances to be checked.
 
         Raises
         ------
         RuntimeError
-            Обнаружен вложеный цикл.
+            If any of the capsules is an instance of Looper.
+
+        Returns
+        -------
+        None
         """
         super().guard(capsules)
         for capsule in capsules:
             if isinstance(capsule, Looper):
-                err = f"{self.__class__.__name__}: "
-                err += "internal loopers are not allowed."
-                raise RuntimeError(err)
+                raise RuntimeError(
+                    f"{self.__class__.__name__}: "
+                    "internal loopers are not allowed."
+                )
 
     def infer_repeats(self):
-        """Вывод количества повторений из датасетов.
+        """
+        Infers the number of repeats based on the total items in Dataset
+        capsules.
+
+        This method calculates the total number of items across all Dataset
+        capsules and sets it as the number of repeats for the Looper. If no
+        Dataset capsules are found, the repeats remain unchanged.
+
+        Returns
+        -------
+        None
+
+        Notes
+        -----
+        - This method assumes that Dataset capsules have a '_total' attribute.
+        - The inferred number of repeats is logged using the class logger.
         """
         repeats = 0
         for capsule in self._capsules:
-            # проверяем наследников датасета, у них есть поле _total.
+            # check dataset descendants, they have a _total field
             if isinstance(capsule, Dataset):
                 repeats += capsule._total
 
         if repeats:
             self._repeats = repeats
 
-        message = f"{self.__class__.__name__} infered {self._repeats} repeats."
-        self._logger.info(message)
+        self._logger.info(
+            f"{self.__class__.__name__} infered {self._repeats} repeats."
+        )

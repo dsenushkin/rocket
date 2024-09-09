@@ -1,179 +1,154 @@
-import os
+# Copyright (c) 2023 Rocket Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-from accelerate import Accelerator
+import os
 
 from rocket.core.capsule import Capsule, Attributes
 
 
 class Checkpointer(Capsule):
-    """Чекпоинтер.
-    Этот класс управляет процессом сохранения состояния процесса.
-    Средствами акселератора сохраняет модели, оптимизаторы, шедулеры,
-    даталоадеры и все состояния капсул, которые были зарегистрированы
-    в акселераторе.
-
-    Пример:
-
-    .. code-block:: python
-
-        mnist = MNIST(path, ...)
-        net = myAwesomeNet(...)
-        loss = myAwesomeLoss(...)
-        opt = myAwesomeOpt(...)
-
-        launcher = rocket.Launcher([
-                rocket.Looper([
-                    rocket.Dataset(mnist, batch_size=1024),
-                    rocket.Module(net, capsules=[
-                        rocket.Loss(objective=loss),
-                        rocket.Optimizer(opt),
-                    ]),
-                    rocket.Checkpointer(output_dir="./logs/",
-                        overwrite=True,
-                        save_every=50)
-                ]),
-            ],
-            num_epochs=4
-        )
-
-    Parameters
-    ----------
-    output_dir : str
-        Путь до директории, где будут сохраняться веса состояния.
-    resume : str | None, optional, default = None
-        Путь до директории, где лежат веса состояния для восстановления.
-    strict : bool, optional, default = True
-        Флаг загрузки состояния капсул. По умолчанию пытаемся восстанавливать.
-    save_every : int | None, optional, default = None
-        Периодичность сохранения сотояния. Отсчитывается в количествах
-        вызовов обработчика события :code:`Events.LAUNCH`.
-    overwrite : bool, optional, default = True
-        Флаг записи весов. Перезаписывает существующие логи при конфликтах.
-    statefull : bool, optional, default = True
-        Флаг состояни капсулы чекпоинтера. По умолчанию содержит состояние.
-    accelerator : Accelerator | None, optional, default = None
-        Объекта класса accelerate.Accelerator.
-    priority : int, optional, default = 100
-        Приоритет вызова обработчиков событий в очереди.
-        Чем меньше значение, тем выше приоритет.
     """
+    A class for managing checkpoints in the Rocket framework.
+
+    This class extends the Capsule class and provides functionality for saving
+    checkpoints at specified intervals during training or other iterative
+    processes.
+
+    Attributes:
+    -----------
+    _save_every : int
+        The frequency at which checkpoints are saved. If negative, no
+        checkpoints are saved.
+    _output_dir : str
+        The directory where checkpoints are saved.
+    _overwrite : bool
+        Whether to overwrite existing checkpoints.
+    _iter_idx : int
+        The current iteration index.
+
+    Parameters:
+    -----------
+    output_dir : str
+        The directory where checkpoints will be saved.
+    save_every : int | None, optional
+        The frequency at which to save checkpoints. If None, defaults to -1
+        (no saving).
+    overwrite : bool, optional
+        Whether to overwrite existing checkpoints. Defaults to True.
+    statefull : bool, optional
+        Whether the Checkpointer maintains state. Defaults to True.
+    priority : int, optional
+        The priority of this Checkpointer in the event handling queue.
+        Defaults to 100.
+    """
+
     def __init__(
         self,
         output_dir: str,
-        resume: str | None = None,
-        strict: bool = True,
         save_every: int | None = None,
         overwrite: bool = True,
         statefull: bool = True,
-        accelerator: Accelerator | None = None,
         priority: int = 100
     ) -> None:
-        super().__init__(accelerator=accelerator,
-                         statefull=statefull,
+        super().__init__(statefull=statefull,
                          priority=priority)
         self._save_every = save_every or -1
         self._output_dir = output_dir
-        self._resume = resume
-        self._strict = strict
         self._overwrite = overwrite
         self._iter_idx = 0
-        # state for distributed
-        self._num_procs = 1
-        self._num_nodes = 1
 
-    def setup(self, attrs: Attributes | None = None):
-        """Обработчик события :code:`Events.SETUP`.
-        Если капсула имеет состояние, то регистрирует ее в акселераторе.
-        Дополнительно восстанавливает состояние из чекпоинта, если необходимо.
-        В strict=True режиме восстанавливает все состояния капсул в пайплайне.
-        Необходимо учитывать distributed контекст, в котором запускался
-        чекпоинт, из которого восстанавливается состояние. Контексты должны
-        быть идентичны, иначе восстановление стостояний как минимум 
-        даталоадеров будет некорректным.
-        В strict=False режиме восстановление возможно только 
-        без распределенного обучения.
-
-        Parameters
-        ----------
-        attrs : Attributes | None, optional, default = None
-            Глобальный буфер обмена данными.
+    def launch(self, attrs: Attributes | None = None) -> None:
         """
-        Capsule.setup(self, attrs=attrs)
+        Handles the :code:`Events.LAUNCH` event.
 
-        self._resume = attrs.checkpointer.resume
-        self._strict = attrs.checkpointer.strict
-
-        if self._resume is not None:
-            if not self._strict:
-                # strict mode регулирует загрузку стейтов капсул
-                # strict = False -> не загружаем капсулы
-                # чистим буфер акселератора перед загрузкой весов
-                custom_objects = self._accelerator._custom_objects
-                self._accelerator._custom_objects = []
-                try:
-                    # Игнорируем исключение вызванное разным количеством
-                    # обнаруженных весов и зарегистрированных объектов.
-                    self._accelerator.load_state(self._resume)
-                except RuntimeError:
-                    # возвращаем назад, чтобы иметь возможность логировать
-                    self._accelerator._custom_objects = custom_objects
-            else:
-                # strict = True -> восстанавливаем полное состояние
-                self._accelerator.load_state(self._resume)
-
-            if self._num_procs != attrs.launcher.num_procs or \
-                    self._num_nodes != attrs.launcher.num_nodes:
-                raise RuntimeError("You need to resume your training in " +
-                                   "the exact same distributed setup.")
-
-        self._num_procs = attrs.launcher.num_procs
-        self._num_nodes = attrs.launcher.num_nodes
-
-    def launch(self, attrs: Attributes | None = None):
-        """Обработчик события :code:`Events.LAUNCH`.
-        С заданной периодичностью выполняет сохраниение состояния пайплайна.
+        This method is responsible for saving checkpoints at specified
+        intervals. It only runs on the main process and checks if it's time
+        to save based on the current iteration index and save frequency.
 
         Parameters
         ----------
-        attrs : Attributes | None, optional, default = None
-            Глобальный буфер обмена данными.
+        attrs : Attributes | None, optional
+            The global data exchange buffer.
 
         Raises
         ------
         RuntimeError
-            Неразрешенная попытка переписать существующую директорию.
+            If overwrite is False and the output directory already exists.
+
+        Returns
+        -------
+        None
         """
-        # вызываем для возможного дополнения функциональности по умолчанию
+        # Call the parent method to potentially add default functionality
         Capsule.launch(self, attrs=attrs)
 
         if not self._accelerator.is_main_process:
             return
 
-        # отрицательный период, значит не делаем ничего
+        # Negative period means we don't do anything
         if self._save_every < 0:
             return
 
-        # сохранение всех зарегистрированных объектов
+        # Save all registered objects
         if (self._iter_idx + 1) % self._save_every == 0:
-
             output_dir = os.path.join(self._output_dir, str(self._iter_idx))
+
             if not self._overwrite and os.path.exists(output_dir):
-                err = f"{self.__class__.__name__}: overwrite is set to False. "
-                err += f"{output_dir}"
-                raise RuntimeError(err)
+                raise RuntimeError(
+                    f"{self.__class__.__name__}: Cannot overwrite existing "
+                    f"directory. 'overwrite' is set to False and "
+                    f"'{output_dir}' already exists."
+                )
 
             self._accelerator.save_state(output_dir=output_dir)
             self._logger.info(f"{self.__class__.__name__}: saved {output_dir}")
-            print(attrs.launcher.epoch_idx, self._iter_idx)
+
         self._iter_idx += 1
 
-    def state_dict(self):
-        # +1, т.к. launch сохраняет предыдущий индекс
-        return Attributes(iter_idx=self._iter_idx + 1,
-                          num_procs=self._num_procs,
-                          num_nodes=self._num_nodes)
+    def state_dict(self) -> dict:
+        """
+        Returns a dictionary containing the whole state of the Checkpointer.
 
-    def load_state_dict(self, state):
-        self._iter_idx = state.iter_idx
-        self._num_procs = state.num_procs
-        self._num_nodes = state.num_nodes
+        This method serializes the current state of the Checkpointer, which
+        can be used for saving checkpoints or transferring the state to
+        another instance.
+
+        Returns
+        -------
+        dict
+            A dictionary containing the current iteration index, incremented
+            by 1 since the launch method saves the previous index.
+        """
+        # +1, т.к. launch сохраняет предыдущий индекс
+        return dict(iter_idx=self._iter_idx + 1)
+
+    def load_state_dict(self, state: dict) -> None:
+        """
+        Copies parameters and buffers from state into this Checkpointer.
+
+        This method deserializes the state of the Checkpointer, typically
+        when loading a checkpoint or transferring state between instances.
+
+        Parameters
+        ----------
+        state : dict
+            A dictionary containing the state to be loaded into the
+            Checkpointer. It should have an 'iter_idx' key with the
+            corresponding value.
+
+        Returns
+        -------
+        None
+        """
+        self._iter_idx = state["iter_idx"]

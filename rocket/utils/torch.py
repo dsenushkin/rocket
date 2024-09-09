@@ -11,24 +11,24 @@ MapType = Dict[Type, Callable]
 
 BUILTIN_TYPES = [int, float, str, bool, complex, bytes]
 
-# по умолчанию мы не объединяем списки любых типов в тензоры
-# это поведение отличается от заданного в torch
-# там все типы, которые могут быть преобразованы в тензор, объединяются
+# By default, we don't combine lists of any types into tensors
+# This behavior differs from that specified in torch
+# There, all types that can be converted to a tensor are combined
 def _no_collate(batch, *, collate_fn_map: MapType | None = None):   # noqa E302
     return batch
 
-# фабрика для defaultdict
+# Factory for defaultdict
 def _no_collate_factory():  # noqa E302
     return _no_collate
 
-# таблица обработчиков
+# Handler table
 COLLATE_MAPPINGS = collections.defaultdict(_no_collate_factory) # noqa E302
 COLLATE_MAPPINGS[torch.Tensor] = collate_tensor_fn
 
-# мы только перезадали маппинг обработчиков по типам
-# все остальное выполняется средствами торча
+# We only redefined the mapping of handlers by types
+# Everything else is done using torch tools
 def torch_collate(batch):   # noqa E302
-    # инициализируем обработчик для стандартных типов через фабрику
+    # Initialize handler for standard types through the factory
     if type(batch) in BUILTIN_TYPES:
         COLLATE_MAPPINGS[type(batch)]
     return collate(batch, collate_fn_map=COLLATE_MAPPINGS)
@@ -37,36 +37,36 @@ def torch_collate(batch):   # noqa E302
 
 
 
-# кастомная обертка над методами торча для переноса на устройство # noqa E302
-# по умолчанию обертка не должна ничего делать с не торчевыми типами
+# Custom wrapper over torch methods for transferring to device # noqa E302
+# By default, the wrapper should not do anything with non-torch types
 def _no_move(batch, device, *, move_fn_map: MapType | None = None): # noqa E302
     return batch
 
-# фабрика для defaultdict
+# Factory for defaultdict
 def _no_move_factory(): # noqa E302
     return _no_move
 
-# обертка над торчевым .to
+# Wrapper over torch's .to
 def _move_to(batch, device, *, move_fn_map: MapType | None = None):  # noqa E302
     return batch.to(device)
 
-# таблица обработчиков
+# Handler table
 MOVE_MAPPINGS = collections.defaultdict(_no_move_factory)   # noqa E302
 MOVE_MAPPINGS[torch.Tensor] = _move_to
 MOVE_MAPPINGS[torch.nn.Module] = _move_to
 
-# обрабатываем батчи подходящим обработчиком
+# Process batches with the appropriate handler
 def move(batch, device, *, move_fn_map: MapType | None = None, **kwargs): # noqa E302
     BTYPE = type(batch)
 
     if move_fn_map is not None:
-        # проверка прямого соответствия типу
+        # Check for direct type correspondence
         if BTYPE in move_fn_map:
             return move_fn_map[BTYPE](
                 batch, device, move_fn_map=move_fn_map
             )
 
-        # проверка наследования от заданных типов
+        # Check for inheritance from specified types
         for move_type in move_fn_map:
             if isinstance(batch, move_type):
                 return move_fn_map[move_type](
@@ -77,9 +77,9 @@ def move(batch, device, *, move_fn_map: MapType | None = None, **kwargs): # noqa
         batch, move, device=device, move_fn_map=move_fn_map
     )
 
-# метод дотупный для использования из вне
+# Method available for use from outside
 def torch_move(batch, device):  # noqa E302
     if type(batch) in BUILTIN_TYPES:
-        # инициализируем обработчик для стандартных типов через фабрику
+        # Initialize handler for standard types through the factory
         MOVE_MAPPINGS[type(batch)]
     return move(batch, device, move_fn_map=MOVE_MAPPINGS)

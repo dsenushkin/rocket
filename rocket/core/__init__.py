@@ -9,3 +9,19 @@ from rocket.core.loss import Loss           # noqa F401
 from rocket.core.optimizer import Optimizer # noqa F401
 from rocket.core.scheduler import Scheduler # noqa F401
 from rocket.core.tracker import Tracker     # noqa F401
+from rocket.core.dispatcher import Dispatcher # noqa F401
+
+
+__sphinx_classes__ = [
+    Capsule,
+    Dispatcher,
+    Dataset,
+    Module,
+    Loss,
+    Optimizer,
+    Scheduler,
+    Tracker,
+    Checkpointer,
+    Meter,
+    Metric
+]
