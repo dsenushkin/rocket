@@ -1,7 +1,7 @@
 import torch
 import collections
 
-from torch.utils.data._utils.collate import collate, collate_tensor_fn
+from torch.utils.data._utils.collate import collate, collate_tensor_fn  # type: ignore # noqa E501
 from rocket.utils.collections import apply_to_collection
 
 from typing import Dict, Type, Callable
@@ -83,3 +83,13 @@ def torch_move(batch, device):  # noqa E302
         # Initialize handler for standard types through the factory
         MOVE_MAPPINGS[type(batch)]
     return move(batch, device, move_fn_map=MOVE_MAPPINGS)
+
+
+def register_move_hook(dtype: type, hook: Callable) -> None:
+    if not isinstance(type(dtype), type):
+        raise RuntimeError("The provided dtype is not a type.")
+    MOVE_MAPPINGS[dtype] = hook
+
+
+def register_default_move_hook(dtype: type) -> None:
+    register_move_hook(dtype=dtype, hook=_move_to)
