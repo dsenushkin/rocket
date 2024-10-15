@@ -2,7 +2,7 @@ import torch
 import collections
 
 from torch.utils.data._utils.collate import collate, collate_tensor_fn  # type: ignore # noqa E501
-from rocket.utils.collections import apply_to_collection
+from rocket.utils.collections import apply_to_collection, is_collection
 
 from typing import Dict, Type, Callable
 
@@ -61,7 +61,7 @@ def move(batch, device, *, move_fn_map: MapType | None = None, **kwargs): # noqa
 
     if move_fn_map is not None:
         # Check for direct type correspondence
-        if BTYPE in move_fn_map:
+        if (BTYPE in move_fn_map) or (BTYPE in BUILTIN_TYPES):
             return move_fn_map[BTYPE](
                 batch, device, move_fn_map=move_fn_map
             )
@@ -73,15 +73,15 @@ def move(batch, device, *, move_fn_map: MapType | None = None, **kwargs): # noqa
                     batch, device, move_fn_map=move_fn_map
                 )
 
-    return apply_to_collection(
-        batch, move, device=device, move_fn_map=move_fn_map
-    )
+    if is_collection(batch):
+        return apply_to_collection(
+            batch, move, device=device, move_fn_map=move_fn_map
+        )
+
+    return batch
 
 # Method available for use from outside
 def torch_move(batch, device):  # noqa E302
-    if type(batch) in BUILTIN_TYPES:
-        # Initialize handler for standard types through the factory
-        MOVE_MAPPINGS[type(batch)]
     return move(batch, device, move_fn_map=MOVE_MAPPINGS)
 
 
