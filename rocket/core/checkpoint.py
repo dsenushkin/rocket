@@ -39,8 +39,11 @@ class Checkpointer(Capsule):
 
     Parameters:
     -----------
-    output_dir : str
-        The directory where checkpoints will be saved.
+    output_dir_format : str
+        Specifies subdirectory in project directory where to store checkpoints
+        Must be template string which accepts integer (checkpoint step)
+        Default value `weights/{:03d}` means that first checkpoint is saved into
+        `Launcher.logging_dir/Launcher.tag/weights/001/`
     save_every : int | None, optional
         The frequency at which to save checkpoints. If None, defaults to -1
         (no saving).
@@ -55,7 +58,7 @@ class Checkpointer(Capsule):
 
     def __init__(
         self,
-        output_dir: str,
+        output_dir_format: str = 'weights/{:03d}',
         save_every: int | None = None,
         overwrite: bool = True,
         statefull: bool = True,
@@ -64,7 +67,7 @@ class Checkpointer(Capsule):
         super().__init__(statefull=statefull,
                          priority=priority)
         self._save_every = save_every or -1
-        self._output_dir = output_dir
+        self._output_dir_format = output_dir_format
         self._overwrite = overwrite
         self._iter_idx = 0
 
@@ -102,7 +105,10 @@ class Checkpointer(Capsule):
 
         # Save all registered objects
         if (self._iter_idx + 1) % self._save_every == 0:
-            output_dir = os.path.join(self._output_dir, str(self._iter_idx))
+            output_dir = os.path.join(
+                self._accelerator.project_dir,
+                self._output_dir_format.format(self._iter_idx)
+            )
 
             if not self._overwrite and os.path.exists(output_dir):
                 raise RuntimeError(

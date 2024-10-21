@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+import os
 from typing import Callable
 from typing_extensions import Self
 from accelerate import Accelerator, notebook_launcher
@@ -93,6 +93,7 @@ class Launcher(Dispatcher):
         capsules: list[Capsule],
         tag: str = "rocket",
         logging_dir: str = "./logs",
+        experiment_versioning: bool = True,
         mixed_precision: str | None = None,
         gradient_accumulation_steps: int = 1,
         num_procs: int | None = 1,
@@ -110,9 +111,27 @@ class Launcher(Dispatcher):
         self._gradient_accumulation_steps = gradient_accumulation_steps
         self._tag = tag
         self._logging_dir = logging_dir
+        self._experiment_versioning = experiment_versioning
         # resume params
         self._resume_from = None
         self._load_capsules = True
+
+    def _resolve_project_dir(self):
+        self._project_dir = os.path.join(self._logging_dir, self._tag)
+        if not self._experiment_versioning:
+            if os.path.isdir(self._project_dir):
+                raise ValueError('Project directory already exists and versioning is switched off.'
+                                 'Change experiment name or enable experiment versioning')
+        else:
+            last_version = -1
+            if os.path.isdir(self._project_dir):
+                versions = sorted(map(lambda x: int(x[1:]), filter(
+                    lambda x: x.startswith('v'),
+                    os.listdir(self._project_dir)
+                )))
+                if len(versions) > 0:
+                    last_version = versions[-1]
+            self._project_dir = os.path.join(self._logging_dir, self._tag, 'v{}'.format(last_version + 1))
 
     def setup(self, attrs: Attributes | None = None) -> None:
         """
@@ -135,14 +154,15 @@ class Launcher(Dispatcher):
         -------
         None
         """
+        self._resolve_project_dir()
         _accelerator = Accelerator(
             device_placement=True,
             mixed_precision=self._mixed_precision,
             gradient_accumulation_steps=self._gradient_accumulation_steps,
             project_config=ProjectConfiguration(
-                project_dir=self._tag,
-                logging_dir=self._logging_dir
-            )
+                project_dir=self._project_dir,
+            ),
+            project_dir=self._project_dir
         )
 
         self.accelerate(_accelerator)
