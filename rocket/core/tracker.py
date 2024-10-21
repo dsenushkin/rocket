@@ -1,4 +1,4 @@
-
+import os
 # Copyright (c) 2023 Rocket Contributors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -53,14 +53,12 @@ class Tracker(Capsule):
     def __init__(
         self,
         backend: str = "tensorboard",
-        tag: str = "exp_0",
         config: dict = None,
         priority: int = 200
     ) -> None:
         super().__init__(priority=priority)
         self._backend = backend
         self._tracker = None
-        self._tag = tag
         self._config = config or None
 
     def setup(self, attrs: Attributes | None = None) -> None:
@@ -94,8 +92,9 @@ class Tracker(Capsule):
             )
 
             try:
+                project_name = os.path.basename(self._accelerator.project_dir)
                 self._accelerator.log_with.append(self._backend)
-                self._accelerator.init_trackers(self._tag, self._config)
+                self._accelerator.init_trackers('', self._config)
             except Exception as e:
                 raise RuntimeError(
                     f"{self.__class__.__name__} can't create tracker: {e}"
