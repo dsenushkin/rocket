@@ -133,6 +133,16 @@ class Launcher(Dispatcher):
                     last_version = versions[-1]
             self._project_dir = os.path.join(self._logging_dir, self._tag, 'v{}'.format(last_version + 1))
 
+    def _create_project_dir(self):
+        # Wait before project dir is created so all processes resolve project directory into the same dir
+        self._accelerator.wait_for_everyone()
+        if self._accelerator.is_main_process:
+            os.makedirs(self._project_dir, exist_ok=True)
+        # Wait until project dir is created.
+        # Error can occur if child processes will start executing code that assumes
+        # project directory already exists
+        self._accelerator.wait_for_everyone()
+
     def setup(self, attrs: Attributes | None = None) -> None:
         """
         Handler for the :class:`Events.SETUP` event.
@@ -164,8 +174,8 @@ class Launcher(Dispatcher):
             ),
             project_dir=self._project_dir
         )
-
         self.accelerate(_accelerator)
+        self._create_project_dir()
 
         self._num_procs = attrs.launcher.num_procs
         self._num_nodes = attrs.launcher.num_nodes

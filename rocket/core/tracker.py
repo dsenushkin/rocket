@@ -83,7 +83,10 @@ class Tracker(Capsule):
         None
         """
         Capsule.setup(self, attrs=attrs)
-        self._tracker = self._accelerator.get_tracker(self._backend)
+        if isinstance(self._backend, GeneralTracker):
+            self._tracker = self._backend
+        else:
+            self._tracker = self._accelerator.get_tracker(self._backend)
 
         if type(self._tracker) == GeneralTracker:   # noqa E721
             self._logger.warn(
