@@ -274,8 +274,7 @@ class Launcher(Dispatcher):
 
     @staticmethod
     def destroy_process_group():
-        if dist.is_initialized():
-            dist.destroy_process_group()
+        PartialState().destroy_process_group()
 
     def destroy(self, attrs: Attributes | None = None) -> None:
         """
