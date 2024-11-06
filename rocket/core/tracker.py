@@ -95,7 +95,6 @@ class Tracker(Capsule):
                 )
 
                 try:
-                    project_name = os.path.basename(self._accelerator.project_dir)
                     self._accelerator.log_with.append(self._backend)
                     self._accelerator.init_trackers('', self._config)
                 except Exception as e:
