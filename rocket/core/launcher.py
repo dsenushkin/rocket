@@ -13,9 +13,11 @@
 # limitations under the License.
 import os
 from typing import Callable
+
+import torch.distributed as dist
 from typing_extensions import Self
-from accelerate import Accelerator, notebook_launcher
-from accelerate.utils import ProjectConfiguration
+from accelerate import Accelerator, notebook_launcher, PartialState
+from accelerate.utils import ProjectConfiguration, broadcast_object_list
 
 from rocket.core.dispatcher import Dispatcher
 from rocket.core.capsule import Attributes, Capsule
@@ -59,6 +61,8 @@ class Launcher(Dispatcher):
         Number of nodes for distributed training. Default is 1.
     num_epochs : int, optional
         Number of epochs to run. Default is 1.
+    destroy_process_group_after_launch: bool = True
+        If true, launch destroys process group after execution
     statefull : bool, optional
         Whether the launcher maintains state across runs. Default is False.
 
@@ -99,6 +103,7 @@ class Launcher(Dispatcher):
         num_procs: int | None = 1,
         num_nodes: int | None = 1,
         num_epochs: int = 1,
+        destroy_process_group_after_launch: bool = True,
         statefull: bool = False,
     ) -> None:
         super().__init__(capsules=capsules)
@@ -112,6 +117,7 @@ class Launcher(Dispatcher):
         self._tag = tag
         self._logging_dir = logging_dir
         self._experiment_versioning = experiment_versioning
+        self._destroy_process_group_after_launch = destroy_process_group_after_launch
         # resume params
         self._resume_from = None
         self._load_capsules = True
@@ -133,15 +139,12 @@ class Launcher(Dispatcher):
                     last_version = versions[-1]
             self._project_dir = os.path.join(self._logging_dir, self._tag, 'v{}'.format(last_version + 1))
 
+        # Synchronize project directory across distributed process group
+        self._project_dir = broadcast_object_list([self._project_dir], from_process=0)[0]
+
     def _create_project_dir(self):
-        # Wait before project dir is created so all processes resolve project directory into the same dir
-        self._accelerator.wait_for_everyone()
         if self._accelerator.is_main_process:
             os.makedirs(self._project_dir, exist_ok=True)
-        # Wait until project dir is created.
-        # Error can occur if child processes will start executing code that assumes
-        # project directory already exists
-        self._accelerator.wait_for_everyone()
 
     def setup(self, attrs: Attributes | None = None) -> None:
         """
@@ -269,6 +272,11 @@ class Launcher(Dispatcher):
 
         self.destroy(attrs)
 
+    @staticmethod
+    def destroy_process_group():
+        if dist.is_initialized():
+            dist.destroy_process_group()
+
     def destroy(self, attrs: Attributes | None = None) -> None:
         """
         Handles the :code:`Events.DESTROY` event.
@@ -291,6 +299,9 @@ class Launcher(Dispatcher):
         del attrs.launcher
         self._accelerator.end_training()
         self.clear()
+
+        if self._destroy_process_group_after_launch:
+            self.destroy_process_group()
 
     def _resume(self, attrs: Attributes) -> None:
         """
