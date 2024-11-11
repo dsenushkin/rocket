@@ -5,4 +5,4 @@ tqdm>=4.65.0
 tensorboard>=2.12.0
 flake8>=6.0.0
 termcolor>=2.0.0
-adict@git+https://github.com/dsenushkin/adict.git
+adict@git+https://github.com/dsenushkin/adict

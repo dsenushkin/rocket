@@ -14,7 +14,6 @@
 import os
 from typing import Callable
 
-import torch.distributed as dist
 from typing_extensions import Self
 from accelerate import Accelerator, notebook_launcher, PartialState
 from accelerate.utils import ProjectConfiguration, broadcast_object_list
@@ -48,7 +47,7 @@ class Launcher(Dispatcher):
     capsules : list of Capsule
         List of capsules to be managed by the launcher.
     tag : str, optional
-        Project tag. Default is None, which assumes project directory should not be created
+        Project tag. Default is None, which assumes project directory should not be created     # noqa E501
     logging_dir : str, optional
         Logging directory. Default is "./logs". Has no effect when tag is None.
     mixed_precision : str or None, optional
@@ -130,8 +129,10 @@ class Launcher(Dispatcher):
         self._project_dir = os.path.join(self._logging_dir, self._tag)
         if not self._experiment_versioning:
             if os.path.isdir(self._project_dir):
-                raise ValueError('Project directory already exists and versioning is switched off.'
-                                 'Change experiment name or enable experiment versioning')
+                raise ValueError(
+                    'Project directory already exists and versioning is switched off. '
+                    'Change experiment name or enable experiment versioning'
+                )
         else:
             last_version = -1
             if os.path.isdir(self._project_dir):
@@ -141,7 +142,9 @@ class Launcher(Dispatcher):
                 )))
                 if len(versions) > 0:
                     last_version = versions[-1]
-            self._project_dir = os.path.join(self._logging_dir, self._tag, 'v{}'.format(last_version + 1))
+            self._project_dir = os.path.join(
+                self._logging_dir, self._tag, 'v{}'.format(last_version + 1)
+            )
 
         # Synchronize project directory across distributed process group
         self._project_dir = broadcast_object_list([self._project_dir], from_process=0)[0]
