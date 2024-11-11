@@ -13,9 +13,11 @@
 # limitations under the License.
 import os
 from typing import Callable
+
+import torch.distributed as dist
 from typing_extensions import Self
-from accelerate import Accelerator, notebook_launcher
-from accelerate.utils import ProjectConfiguration
+from accelerate import Accelerator, notebook_launcher, PartialState
+from accelerate.utils import ProjectConfiguration, broadcast_object_list
 
 from rocket.core.dispatcher import Dispatcher
 from rocket.core.capsule import Attributes, Capsule
@@ -46,9 +48,9 @@ class Launcher(Dispatcher):
     capsules : list of Capsule
         List of capsules to be managed by the launcher.
     tag : str, optional
-        Project tag. Default is "rocket".
+        Project tag. Default is None, which assumes project directory should not be created
     logging_dir : str, optional
-        Logging directory. Default is "./logs".
+        Logging directory. Default is "./logs". Has no effect when tag is None.
     mixed_precision : str or None, optional
         Mixed precision mode. Default is None.
     gradient_accumulation_steps : int, optional
@@ -59,6 +61,8 @@ class Launcher(Dispatcher):
         Number of nodes for distributed training. Default is 1.
     num_epochs : int, optional
         Number of epochs to run. Default is 1.
+    destroy_process_group_after_launch: bool = True
+        If true, launch destroys process group after execution
     statefull : bool, optional
         Whether the launcher maintains state across runs. Default is False.
 
@@ -91,7 +95,7 @@ class Launcher(Dispatcher):
     def __init__(
         self,
         capsules: list[Capsule],
-        tag: str = "rocket",
+        tag: str = None,
         logging_dir: str = "./logs",
         experiment_versioning: bool = True,
         mixed_precision: str | None = None,
@@ -99,6 +103,7 @@ class Launcher(Dispatcher):
         num_procs: int | None = 1,
         num_nodes: int | None = 1,
         num_epochs: int = 1,
+        destroy_process_group_after_launch: bool = True,
         statefull: bool = False,
     ) -> None:
         super().__init__(capsules=capsules)
@@ -112,11 +117,16 @@ class Launcher(Dispatcher):
         self._tag = tag
         self._logging_dir = logging_dir
         self._experiment_versioning = experiment_versioning
+        self._project_dir = None
+        self._destroy_process_group_after_launch = destroy_process_group_after_launch
         # resume params
         self._resume_from = None
         self._load_capsules = True
 
     def _resolve_project_dir(self):
+        if self._tag is None:
+            return
+
         self._project_dir = os.path.join(self._logging_dir, self._tag)
         if not self._experiment_versioning:
             if os.path.isdir(self._project_dir):
@@ -132,6 +142,20 @@ class Launcher(Dispatcher):
                 if len(versions) > 0:
                     last_version = versions[-1]
             self._project_dir = os.path.join(self._logging_dir, self._tag, 'v{}'.format(last_version + 1))
+
+        # Synchronize project directory across distributed process group
+        self._project_dir = broadcast_object_list([self._project_dir], from_process=0)[0]
+
+    def _create_project_dir(self):
+        if self._tag is None:
+            return
+
+        if self._accelerator.is_main_process:
+            os.makedirs(self._project_dir, exist_ok=True)
+
+        # dummy barrier to ensure all processes waited until project directory is created,
+        # since capsules rely on the existence of project directory
+        broadcast_object_list([None])
 
     def setup(self, attrs: Attributes | None = None) -> None:
         """
@@ -164,8 +188,8 @@ class Launcher(Dispatcher):
             ),
             project_dir=self._project_dir
         )
-
         self.accelerate(_accelerator)
+        self._create_project_dir()
 
         self._num_procs = attrs.launcher.num_procs
         self._num_nodes = attrs.launcher.num_nodes
@@ -259,6 +283,10 @@ class Launcher(Dispatcher):
 
         self.destroy(attrs)
 
+    @staticmethod
+    def destroy_process_group():
+        PartialState().destroy_process_group()
+
     def destroy(self, attrs: Attributes | None = None) -> None:
         """
         Handles the :code:`Events.DESTROY` event.
@@ -281,6 +309,9 @@ class Launcher(Dispatcher):
         del attrs.launcher
         self._accelerator.end_training()
         self.clear()
+
+        if self._destroy_process_group_after_launch:
+            self.destroy_process_group()
 
     def _resume(self, attrs: Attributes) -> None:
         """

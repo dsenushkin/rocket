@@ -83,24 +83,26 @@ class Tracker(Capsule):
         None
         """
         Capsule.setup(self, attrs=attrs)
-        self._tracker = self._accelerator.get_tracker(self._backend)
+        if isinstance(self._backend, GeneralTracker):
+            self._tracker = self._backend
+        else:
+            self._tracker = self._accelerator.get_tracker(self._backend)
 
-        if type(self._tracker) == GeneralTracker:   # noqa E721
-            self._logger.warn(
-                f"Accelerator has not initialized {self._backend}. "
-                "Trying to create it..."
-            )
-
-            try:
-                project_name = os.path.basename(self._accelerator.project_dir)
-                self._accelerator.log_with.append(self._backend)
-                self._accelerator.init_trackers('', self._config)
-            except Exception as e:
-                raise RuntimeError(
-                    f"{self.__class__.__name__} can't create tracker: {e}"
+            if type(self._tracker) == GeneralTracker:   # noqa E721
+                self._logger.warn(
+                    f"Accelerator has not initialized {self._backend}. "
+                    "Trying to create it..."
                 )
 
-        self._tracker = self._accelerator.get_tracker(self._backend)
+                try:
+                    self._accelerator.log_with.append(self._backend)
+                    self._accelerator.init_trackers('', self._config)
+                except Exception as e:
+                    raise RuntimeError(
+                        f"{self.__class__.__name__} can't create tracker: {e}"
+                    )
+
+            self._tracker = self._accelerator.get_tracker(self._backend)
 
     def set(self, attrs: Attributes | None = None) -> None:
         """

@@ -71,6 +71,15 @@ class Checkpointer(Capsule):
         self._overwrite = overwrite
         self._iter_idx = 0
 
+    def setup(self, attrs: Attributes | None = None) -> None:
+        if self._accelerator.project_dir is None:
+            raise ValueError(
+                'Checkpointer can be used only when project directory is configured'
+                'Current project directory is None. '
+                'This might be due to the `tag=None` set when creating `rocket.Launcher`. '
+                'Set `tag` parameter of `rocket.Launcher` to a specific experiment name'
+            )
+
     def launch(self, attrs: Attributes | None = None) -> None:
         """
         Handles the :code:`Events.LAUNCH` event.
